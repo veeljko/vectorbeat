@@ -15,6 +15,7 @@
 #   streamlit run app.py
 
 import streamlit as st
+from st_keyup import st_keyup
 
 from mrvectorbeat import pipeline, prikaz
 
@@ -80,11 +81,6 @@ def ucitaj_qrels():
 @st.cache_data
 def ucitaj_graf():
     return pipeline.ucitaj_graf()
-
-
-@st.cache_resource
-def ucitaj_kgram():
-    return pipeline.ucitaj_kgram()
 
 
 @st.cache_data
@@ -168,13 +164,12 @@ def ucitaj_sbert_vektore():
 
 
 ind = ucitaj_indeks()
-stablo = ucitaj_trie()
-kgram_indeks = ucitaj_kgram()
 porodice = ucitaj_porodice()
 try:
     df = ucitaj_katalog()
 except FileNotFoundError:
     df = None
+stablo = ucitaj_trie() if df is not None else None
 izvodjaci = ucitaj_izvodjace()
 # SBERT i Ollama se ucitavaju odmah pri pokretanju - trebaju i "Po smislu"
 # i "AI DJ Bot", pa cekanje ide na start, a ne na prvi upit.
@@ -205,8 +200,26 @@ if strana == "Pretraga":
     st.title("Pretraga")
     st.caption("Kucajte naziv pesme ili izvodjaca.")
 
-    # Koristi: st_keyup (from st_keyup import st_keyup), stablo, kgram_indeks,
-    #          ucitaj_popularnost(), df, prikaz.sugestija(), prikaz.kartica()
+    if stablo is None:
+        st.info("Prvo pripremi katalog: python -m scripts.pripremi")
+    else:
+        query = st_keyup("Ime pesme ili izvodjaca", debounce=200, key="pretraga_imena") or ""
+        limit = st.selectbox("Broj predloga", [5, 10, 20], index=1)
+        if query.count("*") > 1:
+            pass
+        elif "*" in query and not query.startswith("*") and not query.endswith("*"):
+            # Pretraga sa zvezdicom u sredini ostaje za kasnije.
+            pass
+        elif query:
+            suggestions = stablo.suggest(query, k=limit)
+            if not suggestions:
+                st.info("Nema predloga za ovaj unos.")
+            for name in suggestions:
+                key = name.casefold()
+                # st.text cuva originalni naziv bez tumacenja HTML-a iz kataloga.
+                st.text(name)
+                st.caption(f"{', '.join(sorted(stablo.types[key]))} | "
+                           f"Pojavljivanja: {stablo.frequencies[key]}")
 
 
 # --- Katalog -----------------------------------------------------------

@@ -16,9 +16,11 @@
 # Tako aplikacija nikad ne gradi nista iznova pri svakom kliku.
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
+from mrvectorbeat.trie.name_search import NameSearch
 
 
 ROOT: Path = Path(__file__).resolve().parents[1]
@@ -183,9 +185,18 @@ def napravi_trie() -> None:
     pass
 
 
-def ucitaj_trie() -> None:
-    """Cita gotov trie iz artifacts/."""
-    pass
+def ucitaj_trie() -> NameSearch:
+    """Ucitaj katalog iz artefakta i izgradi stabla za predloge imena.
+
+    Aplikacija kesira rezultat pomocu st.cache_resource.
+    """
+    catalog: pd.DataFrame = ucitaj_katalog()
+    names: Iterator[tuple[str, str]] = (
+        (name, kind)
+        for column, kind in [("track_name", "Pesma"), ("track_artist", "Izvodjac")]
+        for name in catalog[column]
+    )
+    return NameSearch(names)
 
 
 def ucitaj_porodice() -> None:

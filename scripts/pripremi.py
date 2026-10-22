@@ -29,8 +29,7 @@ print(f"Tokeni: {sum(map(len, tokeni['tokens'])):,} pojavljivanja", flush=True)
 # Trie
 pipeline.napravi_trie()
 
-# K-gramski indeks
-pipeline.napravi_kgram()
+# K-gramski indeks ostaje za kasnije.
 
 # Invertovani indeks
 pipeline.napravi_indeks()
