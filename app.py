@@ -171,7 +171,10 @@ ind = ucitaj_indeks()
 stablo = ucitaj_trie()
 kgram_indeks = ucitaj_kgram()
 porodice = ucitaj_porodice()
-df = ucitaj_katalog()
+try:
+    df = ucitaj_katalog()
+except FileNotFoundError:
+    df = None
 izvodjaci = ucitaj_izvodjace()
 # SBERT i Ollama se ucitavaju odmah pri pokretanju - trebaju i "Po smislu"
 # i "AI DJ Bot", pa cekanje ide na start, a ne na prvi upit.
@@ -211,7 +214,39 @@ if strana == "Pretraga":
 elif strana == "Katalog":
     st.title("Katalog")
 
-    # Koristi: df, prikaz.plocica()
+    if df is None:
+        st.info("Katalog jos nije pripremljen.")
+        st.code("python -m scripts.pripremi", language="bash")
+    else:
+        controls = st.columns(4)
+        genre = controls[0].selectbox("Zanr", ["Svi zanrovi"] + sorted(df["playlist_genre"].unique()))
+        sort_label = controls[1].selectbox("Sortiraj po", ["Popularnost", "Godina izdanja", "Tempo"])
+        direction = controls[2].selectbox("Redosled", ["Opadajuce", "Rastuce"])
+        page_size = controls[3].selectbox("Pesama po strani", [12, 24, 48], index=1)
+        selected = df if genre == "Svi zanrovi" else df[df["playlist_genre"] == genre]
+        sort_column = {"Popularnost": "track_popularity", "Godina izdanja": "godina", "Tempo": "tempo"}[sort_label]
+        selected = selected.sort_values(sort_column, ascending=direction == "Rastuce",
+                                        na_position="last", kind="stable")
+        total = len(selected)
+        pages = max(1, (total + page_size - 1) // page_size)
+        selection = (genre, sort_label, direction, page_size)
+        if st.session_state.get("katalog_izbor") != selection:
+            st.session_state["katalog_strana"] = 1
+            st.session_state["katalog_izbor"] = selection
+        page = st.number_input("Strana", min_value=1, max_value=pages, step=1,
+                               key="katalog_strana")
+        st.caption(f"Ukupno pesama: {total:,} | Strana {page} od {pages}")
+        if total == 0:
+            st.info("Nema pesama za izabrane filtere.")
+        start = (page - 1) * page_size
+        visible = selected.iloc[start:start + page_size]
+        for offset in range(0, len(visible), 4):
+            columns = st.columns(4)
+            for column, (_, row) in zip(columns, visible.iloc[offset:offset + 4].iterrows()):
+                with column:
+                    card = row.copy()
+                    card["godina"] = "Nepoznato" if row["godina"] is None or str(row["godina"]) == "<NA>" else str(int(row["godina"]))
+                    prikaz.plocica(card)
 
 
 # --- Stihovi -----------------------------------------------------------
