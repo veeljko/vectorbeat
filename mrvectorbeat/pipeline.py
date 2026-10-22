@@ -21,17 +21,17 @@ from pathlib import Path
 import pandas as pd
 
 
-ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "artifacts"
-CSV_PATH = ROOT / "data" / "spotify_songs.csv"
-KATALOG_PATH = ARTIFACTS / "katalog.parquet"
-TOKENI_PATH = ARTIFACTS / "tokeni.parquet"
+ROOT: Path = Path(__file__).resolve().parents[1]
+ARTIFACTS: Path = ROOT / "artifacts"
+CSV_PATH: Path = ROOT / "data" / "spotify_songs.csv"
+KATALOG_PATH: Path = ARTIFACTS / "katalog.parquet"
+TOKENI_PATH: Path = ARTIFACTS / "tokeni.parquet"
 
 
 # Kolone koje zadrzavamo u katalogu. Sve ostalo iz CSV-a nam ne treba.
 # Kartice u prikaz.py ocekuju bar: track_name, track_artist, godina,
 # playlist_genre, tempo.
-KOLONE = [
+KOLONE: list[str] = [
     "katalog_id",         # indeks izvornog reda; cuva i ponovljene track_id
     "track_id",
     "track_name",
@@ -56,33 +56,33 @@ KOLONE = [
                           # verzije iste pesme
 ]
 
-_VERSION = re.compile(
+_VERSION: re.Pattern[str] = re.compile(
     r"\b(?:remix(?:ed)?|remaster(?:ed)?|live|feat\.?|ft\.?|featuring)\b",
     re.IGNORECASE,
 )
-_BRACKETS = re.compile(r"\([^()]*\)|\[[^\[\]]*\]")
+_BRACKETS: re.Pattern[str] = re.compile(r"\([^()]*\)|\[[^\[\]]*\]")
 
 
-def _normalizuj_ime(value):
+def _normalizuj_ime(value: str) -> str:
     return " ".join(re.findall(r"[^\W_]+", str(value).casefold()))
 
 
-def kljuc_porodice(naslov, izvodjac):
+def kljuc_porodice(naslov: str, izvodjac: str) -> str:
     """Heuristika: ukloni oznake verzije, zadrzi ostale delove naslova."""
     #Izbacuje Remix, Live i slicno i ostavlja samo ime pesme
     #Song - 2004 Remaster → Song
     #Song - DJ Remix     → Song
     #Song - Live at Wembley → Song
-    title = str(naslov)
+    title: str = str(naslov)
     while True:
-        cleaned = _BRACKETS.sub(
+        cleaned: str = _BRACKETS.sub(
             lambda match: " " if _VERSION.search(match.group()) else match.group(), title
         )
         if cleaned == title:
             break
         title = cleaned
     # Izbacuje dodatak iza razdvojne crtice, npr. Song - 2004 Remaster.
-    parts = re.split(r"\s+[-\u2013\u2014]\s+", title)
+    parts: list[str] = re.split(r"\s+[-\u2013\u2014]\s+", title)
     for index, part in enumerate(parts[1:], 1):
         if _VERSION.search(part):
             title = " - ".join(parts[:index])
@@ -92,35 +92,35 @@ def kljuc_porodice(naslov, izvodjac):
     #Normalizuje imena
     #"  ARTIST! " → "artist"
     #"Song (Part Two)" → "song part two"
-    base = _normalizuj_ime(title) or _normalizuj_ime(naslov)
+    base: str = _normalizuj_ime(title) or _normalizuj_ime(naslov)
     #Spaja artist::song kao identifikator
     return _normalizuj_ime(izvodjac) + "::" + base
 
 
-def _snimi_tabelu(tabela, putanja):
+def _snimi_tabelu(tabela: pd.DataFrame, putanja: Path) -> None:
     putanja.parent.mkdir(parents=True, exist_ok=True)
-    temporary = putanja.with_suffix(".tmp.parquet")
+    temporary: Path = putanja.with_suffix(".tmp.parquet")
     tabela.to_parquet(temporary, index=False)
     temporary.replace(putanja)
 
 
-def napravi_katalog():
+def napravi_katalog() -> pd.DataFrame:
     """Procisti sirovi CSV, sacuvaj sve odgovarajuce redove i vrati DataFrame."""
-    raw = pd.read_csv(CSV_PATH, dtype={"track_id": "string"})
+    raw: pd.DataFrame = pd.read_csv(CSV_PATH, dtype={"track_id": "string"})
 
     #Boolean niz, True ako ta pesma ima language: en
-    english = raw["language"].astype("string").str.strip().str.lower().eq("en")
+    english: pd.Series = raw["language"].astype("string").str.strip().str.lower().eq("en")
     #Tekstovi pesama
-    lyrics = raw["lyrics"].astype("string").str.strip()
+    lyrics: pd.Series = raw["lyrics"].astype("string").str.strip()
     #Uzima samo podatke koji imaju language: en i cija pesma ima tekst
-    catalog = raw.loc[english.fillna(False) & lyrics.notna() & lyrics.ne("")].copy()
+    catalog: pd.DataFrame = raw.loc[english.fillna(False) & lyrics.notna() & lyrics.ne("")].copy()
 
     catalog["lyrics"] = lyrics.loc[catalog.index]
     catalog["katalog_id"] = catalog.index
 
     #izvlaci datum i godinu
-    dates = catalog["track_album_release_date"].astype("string").str.strip()
-    years = dates.str.extract(r"^(\d{4})(?:-\d{2})?(?:-\d{2})?$", expand=False)
+    dates: pd.Series = catalog["track_album_release_date"].astype("string").str.strip()
+    years: pd.Series = dates.str.extract(r"^(\d{4})(?:-\d{2})?(?:-\d{2})?$", expand=False)
     catalog["godina"] = pd.to_numeric(years, errors="coerce").astype("Int64")
 
     #Ova petlja osigurava da naslov, izvođač i žanr postoje i imaju tekstualnu vrednost, kako bi kartice mogle da ih prikažu.
@@ -133,7 +133,7 @@ def napravi_katalog():
                             zip(catalog["track_name"], catalog["track_artist"])]
 
     #Setuje odgovarajuci tip za svaku kolonu
-    text_columns = {"track_id", "track_name", "track_artist", "lyrics",
+    text_columns: set[str] = {"track_id", "track_name", "track_artist", "lyrics",
                     "track_album_name", "playlist_genre", "playlist_subgenre", "porodica"}
     for column in KOLONE:
         if column in text_columns:
@@ -146,20 +146,20 @@ def napravi_katalog():
     return catalog
 
 
-def ucitaj_katalog():
+def ucitaj_katalog() -> pd.DataFrame:
     """Ucitaj iskljucivo gotov artefakt, bez pristupa sirovom CSV-u."""
     if not KATALOG_PATH.exists():
         raise FileNotFoundError("Katalog nije pripremljen. Pokreni: python -m scripts.pripremi")
     return pd.read_parquet(KATALOG_PATH)
 
 
-def napravi_tokene():
+def napravi_tokene() -> pd.DataFrame:
     """Vrati i sacuvaj tabelu katalog_id, track_id, tokens (lista stringova)."""
     # Lazy import: citanje kataloga u aplikaciji ne zahteva NLTK korpuse.
     from mrvectorbeat.textprocessing.text_processor import TextProcessor
 
-    catalog = ucitaj_katalog()
-    tokens = catalog[["katalog_id", "track_id"]].copy()
+    catalog: pd.DataFrame = ucitaj_katalog()
+    tokens: pd.DataFrame = catalog[["katalog_id", "track_id"]].copy()
     # Sve instance koriste isti klasni kes; ne prazni se izmedju pesama.
     tokens["tokens"] = [TextProcessor(lyrics).text_tokenize(method="stem")
                         for lyrics in catalog["lyrics"]]
@@ -168,78 +168,78 @@ def napravi_tokene():
     return tokens
 
 
-def ucitaj_tokene():
+def ucitaj_tokene() -> pd.DataFrame:
     """Ucitaj tabelu tokena iz artefakta; ne pokrece obradu teksta."""
     if not TOKENI_PATH.exists():
         raise FileNotFoundError("Tokeni nisu pripremljeni. Pokreni: python -m scripts.pripremi")
-    tokens = pd.read_parquet(TOKENI_PATH)
+    tokens: pd.DataFrame = pd.read_parquet(TOKENI_PATH)
     tokens["tokens"] = tokens["tokens"].map(list)
     
     return tokens
 
 
-def napravi_trie():
+def napravi_trie() -> None:
     """Gradi trie nad imenima pesama i izvodjaca i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_trie():
+def ucitaj_trie() -> None:
     """Cita gotov trie iz artifacts/."""
     pass
 
 
-def ucitaj_porodice():
+def ucitaj_porodice() -> None:
     """Vraca recnik track_id -> porodica."""
     pass
 
 
-def ucitaj_popularnost():
+def ucitaj_popularnost() -> None:
     """Vraca recnik ime (pesma ili izvodjac) -> popularnost."""
     pass
 
 
-def napravi_kgram():
+def napravi_kgram() -> None:
     """Gradi k-gramski indeks nad imenima pesama i izvodjaca i snima ga u
     artifacts/."""
     pass
 
 
-def ucitaj_kgram():
+def ucitaj_kgram() -> None:
     """Cita gotov k-gramski indeks iz artifacts/."""
     pass
 
 
-def napravi_indeks():
+def napravi_indeks() -> None:
     """Gradi invertovani indeks iz tokena i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_indeks():
+def ucitaj_indeks() -> None:
     """Cita gotov indeks iz artifacts/."""
     pass
 
 
-def napravi_tfidf():
+def napravi_tfidf() -> None:
     """Gradi TF-IDF model i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_tfidf():
+def ucitaj_tfidf() -> None:
     """Cita gotov TF-IDF model iz artifacts/."""
     pass
 
 
-def napravi_bm25():
+def napravi_bm25() -> None:
     """Gradi BM25 model i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_bm25():
+def ucitaj_bm25() -> None:
     """Cita gotov BM25 model iz artifacts/."""
     pass
 
 
-def ucitaj_qrels(skup=None):
+def ucitaj_qrels(skup: str | None = None) -> None:
     """Cita test upite iz data/qrels.csv.
 
     skup - "poznata_stavka", "tema", ili None za oba.
@@ -247,91 +247,91 @@ def ucitaj_qrels(skup=None):
     pass
 
 
-def napravi_evaluaciju():
+def napravi_evaluaciju() -> None:
     """Racuna metrike za TF-IDF i BM25 nad qrels i snima tabelu u
     artifacts/."""
     pass
 
 
-def ucitaj_evaluaciju():
+def ucitaj_evaluaciju() -> None:
     """Cita gotovu tabelu metrika iz artifacts/."""
     pass
 
 
-def napravi_jezicki(mu=1000.0):
+def napravi_jezicki(mu: float = 1000.0) -> None:
     """Gradi jezicki model i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_jezicki():
+def ucitaj_jezicki() -> None:
     """Cita gotov jezicki model iz artifacts/."""
     pass
 
 
-def ucitaj_graf():
+def ucitaj_graf() -> None:
     """Cita graf izvodjaca koji je napravio vas crawler."""
     pass
 
 
-def napravi_rangove():
+def napravi_rangove() -> None:
     """Racuna PageRank nad grafom izvodjaca i snima rang-listu u
     artifacts/."""
     pass
 
 
-def ucitaj_rangove():
+def ucitaj_rangove() -> None:
     """Cita gotovu rang-listu iz artifacts/."""
     pass
 
 
-def napravi_kdrvo():
+def napravi_kdrvo() -> None:
     """Gradi k-d stablo nad audio-osobinama kataloga i snima ga u
     artifacts/."""
     pass
 
 
-def ucitaj_kdrvo():
+def ucitaj_kdrvo() -> None:
     """Cita gotovo k-d stablo iz artifacts/."""
     pass
 
 
-def napravi_semantiku():
+def napravi_semantiku() -> None:
     """Gradi semanticki model nad katalogom i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_semantiku():
+def ucitaj_semantiku() -> None:
     """Cita gotov semanticki model iz artifacts/."""
     pass
 
 
-def napravi_rag_korpus():
+def napravi_rag_korpus() -> None:
     """Gradi korpus za AI DJ Bot-a i snima ga u artifacts/."""
     pass
 
 
-def ucitaj_rag_korpus():
+def ucitaj_rag_korpus() -> None:
     """Cita gotov RAG korpus iz artifacts/."""
     pass
 
 
-def napravi_hibrid_evaluaciju():
+def napravi_hibrid_evaluaciju() -> None:
     """Racuna metrike hibridne pretrage nad qrels i snima tabelu u
     artifacts/."""
     pass
 
 
-def ucitaj_hibrid_evaluaciju():
+def ucitaj_hibrid_evaluaciju() -> None:
     """Cita gotovu tabelu metrika hibridne pretrage iz artifacts/."""
     pass
 
 
-def napravi_autoplay():
+def napravi_autoplay() -> None:
     """Gradi Autoplay nad data/music4all_istorija.csv i snima ga u
     artifacts/."""
     pass
 
 
-def ucitaj_autoplay():
+def ucitaj_autoplay() -> None:
     """Cita gotov Autoplay iz artifacts/."""
     pass
