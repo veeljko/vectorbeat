@@ -64,17 +64,19 @@ class Trie:
         node = self._find_node(word)
         return 0 if node is None else node.endCount
 
-    def _top_k(self, node: Node | None, k: int) -> list[str]:
-        if isinstance(k, bool) or not isinstance(k, int) or k < 0:
+    def _top_k(self, node: Node | None, k: int | None) -> list[str]:
+        if k is not None and (isinstance(k, bool) or not isinstance(k, int) or k < 0):
             raise ValueError("k mora biti nenegativan ceo broj")
         if node is None or k == 0 or node.max_frequency == 0:
             return []
+
+        
         serial = count()
         # Grana ima gornju granicu ucestanosti, terminal tacnu ucestanost.
         pending: list[tuple[int, int, bool, Node]] = []
         heapq.heappush(pending, (-node.max_frequency, next(serial), False, node))
         result: list[str] = []
-        while pending and len(result) < k:
+        while pending and (k is None or len(result) < k):
             _, _, terminal, current = heapq.heappop(pending)
             if terminal:
                 assert current.original is not None
@@ -87,8 +89,8 @@ class Trie:
         # Svi preostali prioriteti su <= poslednje vracene ucestanosti.
         return result
 
-    def find_words_with_prefix(self, prefix: str, k: int = 10) -> list[str]:
-        """Vrati najvise k najcescih imena za prefiks ili prefiks*."""
+    def find_words_with_prefix(self, prefix: str, k: int | None = 10) -> list[str]:
+        """Vrati top-k za prefiks/prefiks*; k=None vraca sva poklapanja."""
         if "*" in prefix:
             if prefix.count("*") == 1 and prefix.endswith("*"):
                 prefix = prefix[:-1]
@@ -98,7 +100,7 @@ class Trie:
                 raise ValueError("Za unutrasnje ili vise zvezdica koristi k-gramski indeks")
         return self._top_k(self._find_node(prefix), k)
 
-    def find_words(self, pattern: str, k: int = 10) -> list[str]:
+    def find_words(self, pattern: str, k: int | None = 10) -> list[str]:
         return self.find_words_with_prefix(pattern, k)
 
 
@@ -108,10 +110,10 @@ class ReverseTrie(Trie):
     def _key(self, word: str) -> str:
         return word.casefold()[::-1]
 
-    def find_words_with_prefix(self, prefix: str, k: int = 10) -> list[str]:
+    def find_words_with_prefix(self, prefix: str, k: int | None = 10) -> list[str]:
         raise ValueError("Za prefiks ili prefiks* koristi Trie; ReverseTrie koristi *sufiks")
 
-    def find_words(self, pattern: str, k: int = 10) -> list[str]:
+    def find_words(self, pattern: str, k: int | None = 10) -> list[str]:
         if pattern.count("*") == 1 and pattern.startswith("*"):
             return self._top_k(self._find_node(pattern[1:]), k)
         if "*" not in pattern or (pattern.count("*") == 1 and pattern.endswith("*")):

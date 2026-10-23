@@ -9,16 +9,11 @@ class NameSearch:
     def __init__(self, names: Iterable[tuple[str, str]]) -> None:
         self.forward = Trie()
         self.reverse = ReverseTrie()
-        self.types: dict[str, set[str]] = {}
-        self.frequencies: dict[str, int] = {}
-        for name, kind in names:
+        for name, _ in names:
             if not isinstance(name, str) or not name.strip():
                 continue
-            key = name.casefold()
             self.forward.insert(name)
             self.reverse.insert(name)
-            self.types.setdefault(key, set()).add(kind)
-            self.frequencies[key] = self.frequencies.get(key, 0) + 1
 
     def suggest(self, pattern: str, k: int = 10) -> list[str]:
         if isinstance(k, bool) or not isinstance(k, int) or k < 0:
@@ -32,6 +27,14 @@ class NameSearch:
         elif pattern.startswith("*"):
             return self.reverse.find_words(pattern, k)
         else:
-            # Zvezdica u sredini: implementirati kasnije.
-            pass
+            left, right = pattern.split("*")
+            # Presek mora ukljuciti sva poklapanja, ne samo top-k svake strane.
+            prefix_matches = set(self.forward.find_words(left, k=None))
+            suffix_matches = set(self.reverse.find_words("*" + right, k=None))
+            matches = prefix_matches & suffix_matches
+            # Prefiks i sufiks ne smeju da se preklapaju: ab*bc ne odgovara abc.
+            minimum_length = len(left.casefold()) + len(right.casefold())
+            matches = {name for name in matches if len(name.casefold()) >= minimum_length}
+            return sorted(matches, key=lambda name: (-self.forward.get_frequency(name),
+                                                     name.casefold()))[:k]
         return []

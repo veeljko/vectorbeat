@@ -207,19 +207,14 @@ if strana == "Pretraga":
         limit = st.selectbox("Broj predloga", [5, 10, 20], index=1)
         if query.count("*") > 1:
             pass
-        elif "*" in query and not query.startswith("*") and not query.endswith("*"):
-            # Pretraga sa zvezdicom u sredini ostaje za kasnije.
-            pass
         elif query:
             suggestions = stablo.suggest(query, k=limit)
             if not suggestions:
                 st.info("Nema predloga za ovaj unos.")
             for name in suggestions:
-                key = name.casefold()
                 # st.text cuva originalni naziv bez tumacenja HTML-a iz kataloga.
                 st.text(name)
-                st.caption(f"{', '.join(sorted(stablo.types[key]))} | "
-                           f"Pojavljivanja: {stablo.frequencies[key]}")
+                st.caption(f"Pojavljivanja: {stablo.forward.get_frequency(name)}")
 
 
 # --- Katalog -----------------------------------------------------------
