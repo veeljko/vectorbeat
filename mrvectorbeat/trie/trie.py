@@ -1,7 +1,4 @@
 """Prefiksna i sufiksna dopuna rangirana po ucestanosti imena."""
-
-from __future__ import annotations
-
 import heapq
 from itertools import count
 

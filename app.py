@@ -205,12 +205,12 @@ if strana == "Pretraga":
     else:
         query = st_keyup("Ime pesme ili izvodjaca", debounce=200, key="pretraga_imena") or ""
         limit = st.selectbox("Broj predloga", [5, 10, 20], index=1)
-        if query.count("*") > 1:
-            pass
-        elif query:
+        if query:
             suggestions = stablo.suggest(query, k=limit)
             if not suggestions:
                 st.info("Nema predloga za ovaj unos.")
+            if suggestions and "*" not in query and not suggestions[0].casefold().startswith(query.casefold()):
+                st.info("Nema dopune za ovaj unos. Da li ste mislili:")
             for name in suggestions:
                 # st.text cuva originalni naziv bez tumacenja HTML-a iz kataloga.
                 st.text(name)
