@@ -1,17 +1,48 @@
 class PositionIndex:
-    def __init__(self, tokens: list[list[str]]):
+    def __init__(self, tokens: list[list[str]], document_ids: list[int] | None = None):
         """Svaka unutrasnja lista sadrzi obradjene tokene jednog dokumenta.
 
-        ID dokumenta je njegov indeks u ulaznoj listi, pocevsi od nule.
+        ID dokumenta je katalog_id, ili indeks u ulazu ako ID-evi nisu dati.
         Postings su sortirane liste parova (doc_id, lista pozicija).
         """
+        if document_ids is None:
+            document_ids = list(range(len(tokens)))
+        if len(document_ids) != len(tokens):
+            raise ValueError("Svaki dokument mora imati svoj ID.")
+        documents = sorted(zip(document_ids, tokens), key=lambda item: item[0])
+        self.document_ids = [doc_id for doc_id, _ in documents]
+        if any(a == b for a, b in zip(self.document_ids, self.document_ids[1:])):
+            raise ValueError("ID-evi dokumenata moraju biti jedinstveni.")
         self.index: dict[str, list[tuple[int, list[int]]]] = {}
-        for doc_id, document in enumerate(tokens):
+        for doc_id, document in documents:
             for pos, term in enumerate(document):
                 postings = self.index.setdefault(term, [])
                 if not postings or postings[-1][0] != doc_id:
                     postings.append((doc_id, []))
                 postings[-1][1].append(pos)
+
+    def get_documents(self, word: str) -> list[int]:
+        """ID-eve izdvajamo iz istog pozicionog indeksa za svaki tip upita."""
+        return [doc_id for doc_id, _ in self.index.get(word, [])]
+
+    def find_boolean(self, words: list[str], operator: str = "AND") -> list[int]:
+        """AND: sve reci; OR: bar jedna; DIFFERENCE: prva bez svih ostalih."""
+        operator = operator.upper()
+        if operator not in ("AND", "OR", "DIFFERENCE"):
+            raise ValueError("Operator mora biti AND, OR ili DIFFERENCE.")
+        if not words:
+            return []
+        candidates = [self.get_documents(word) for word in words]
+        if operator == "AND":
+            candidates.sort(key=len)
+        result = candidates[0]
+        operation = {"AND": self.intersection, "OR": self.union,
+                     "DIFFERENCE": self.difference}[operator]
+        for candidate in candidates[1:]:
+            if not result and operator != "OR":
+                break
+            result = operation(result, candidate)
+        return result
 
     def find_phrase(self, words: list[str]) -> list[tuple[int, int]]:
         """Vrati sve (doc_id, pocetna_pozicija) pogotke obradjene fraze."""
@@ -22,6 +53,8 @@ class PositionIndex:
         candidates.sort(key=len)
         documents = candidates[0]
         for candidate in candidates[1:]:
+            if not documents:
+                return []
             documents = self.intersection(documents, candidate)
             if not documents:
                 return []

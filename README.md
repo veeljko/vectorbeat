@@ -97,3 +97,38 @@ SVAKE izmene koda mora rucno zaustaviti (Ctrl+C) i ponovo pokrenuti.
 
 Katalog i Wikipedia tekstovi su na engleskom, pa i upiti treba da budu
 na engleskom.
+
+## Pretraga stihova
+
+Strana **Stihovi** koristi jedan pozicioni indeks iz
+`artifacts/pozicioni_indeks.pkl`. Gradi se iz sacuvanih tokena komandom
+`python -m scripts.pripremi`, a aplikacija ga ucitava jednom i kesira.
+Posle ponovne pripreme artefakata restartujte aplikaciju.
+
+- **Bulova / AND**: pesma sadrzi sve termine upita.
+- **Bulova / OR**: pesma sadrzi bar jedan termin.
+- **Bulova / DIFFERENCE**: pesma sadrzi prvi termin, bez svih ostalih.
+  Na primer, `love night rain` znaci `love` bez `night` i bez `rain`.
+- **Frazna**: termini su uzastopni i istim redosledom.
+- **Blizina**: posle obrade moraju ostati dva termina; trazi se
+  `abs(pozicija_a - pozicija_b) < rastojanje`, u oba redosleda.
+  Za rastojanje 2 prolaze susedni tokeni; za 1 nema pogodaka.
+
+Upit prolazi istu obradu kao stihovi. Pozicije pocinju od nule i odnose
+se na tokene posle uklanjanja stop-reci i stemovanja. Zato fraza
+`love night` moze pogoditi originalni stih `love the night`. Za prikaz
+se pozicije prevode u raspone originalnog teksta; rezultati prikazuju
+do tri isecaka sa oznacenim pogocima, ukupan broj pesama i paginaciju.
+Prazan obradjeni upit vraca prazan rezultat.
+
+Struktura indeksa je `termin -> [(katalog_id, [pozicije]), ...]`.
+Postings i pozicije su sortirane liste. Bulova pretraga iz iste
+strukture izdvaja ID-eve, a frazna i blizina koriste i pozicije.
+Presek, unija i razlika rade sa dva pokazivaca; presek krece od
+najkrace liste i prekida obradu cim rezultat postane prazan.
+
+Testovi se pokrecu iz korena projekta:
+
+```bash
+python -m unittest discover -s tests -v
+```

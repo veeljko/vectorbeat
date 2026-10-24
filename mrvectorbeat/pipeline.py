@@ -16,11 +16,13 @@
 # Tako aplikacija nikad ne gradi nista iznova pri svakom kliku.
 
 import re
+import pickle
 from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
 from mrvectorbeat.search.name_search import NameSearch
+from mrvectorbeat.search.indexes.position_index import PositionIndex
 
 
 ROOT: Path = Path(__file__).resolve().parents[1]
@@ -28,6 +30,7 @@ ARTIFACTS: Path = ROOT / "artifacts"
 CSV_PATH: Path = ROOT / "data" / "spotify_songs.csv"
 KATALOG_PATH: Path = ARTIFACTS / "katalog.parquet"
 TOKENI_PATH: Path = ARTIFACTS / "tokeni.parquet"
+INDEKS_PATH: Path = ARTIFACTS / "pozicioni_indeks.pkl"
 
 
 # Kolone koje zadrzavamo u katalogu. Sve ostalo iz CSV-a nam ne treba.
@@ -220,14 +223,35 @@ def ucitaj_kgram() -> None:
     pass
 
 
-def napravi_indeks() -> None:
-    """Gradi invertovani indeks iz tokena i snima ga u artifacts/."""
-    pass
+def napravi_indeks() -> PositionIndex:
+    """Iz svih obradjenih stihova napravi jedan indeks za sve tipove upita."""
+    catalog: pd.DataFrame = ucitaj_katalog().sort_values("katalog_id")
+    tokens: pd.DataFrame = ucitaj_tokene().sort_values("katalog_id")
+    if (catalog["katalog_id"].duplicated().any()
+            or tokens["katalog_id"].duplicated().any()
+            or catalog["katalog_id"].tolist() != tokens["katalog_id"].tolist()
+            or catalog["track_id"].tolist() != tokens["track_id"].tolist()):
+        raise ValueError("Katalog i tokeni nisu uskladjeni. Pokreni: python -m scripts.pripremi")
+    index: PositionIndex = PositionIndex(
+        tokens["tokens"].tolist(), [int(value) for value in tokens["katalog_id"]]
+    )
+    INDEKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path = INDEKS_PATH.with_suffix(".tmp.pkl")
+    with temporary.open("wb") as output:
+        pickle.dump(index, output, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary.replace(INDEKS_PATH)
+    return index
 
 
-def ucitaj_indeks() -> None:
-    """Cita gotov indeks iz artifacts/."""
-    pass
+def ucitaj_indeks() -> PositionIndex:
+    """Cita pripremljen indeks; aplikacija ga kesira pomocu cache_resource."""
+    if not INDEKS_PATH.exists():
+        raise FileNotFoundError("Indeks nije pripremljen. Pokreni: python -m scripts.pripremi")
+    for source in (KATALOG_PATH, TOKENI_PATH):
+        if source.exists() and source.stat().st_mtime_ns > INDEKS_PATH.stat().st_mtime_ns:
+            raise ValueError("Indeks je zastareo. Pokreni: python -m scripts.pripremi")
+    with INDEKS_PATH.open("rb") as source:
+        return pickle.load(source)
 
 
 def napravi_tfidf() -> None:

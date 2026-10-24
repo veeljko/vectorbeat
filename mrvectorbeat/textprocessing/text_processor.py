@@ -1,4 +1,5 @@
 import string
+import re
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer, WordNetLemmatizer
 from nltk import pos_tag
@@ -129,3 +130,33 @@ class TextProcessor:
         if method == "stem":
             return self.word_stem(tokens)
         return self.word_lem(tokens)
+
+    def tokenize_with_spans(self) -> tuple[list[str], list[tuple[int, int]]]:
+        """Default stem tokeni i [pocetak, kraj) svakog tokena u originalu.
+
+        Pozicije indeksa broje obradjene tokene, pa za isecak moramo sacuvati
+        vezu sa originalom, ukljucujuci izbacene stop-reci i interpunkciju.
+        """
+        if not isinstance(self.text, str):
+            raise ValueError("Za pozicije u originalu potreban je string.")
+        lower_offsets: list[int] = []
+        for offset, char in enumerate(self.text):
+            lower_offsets.extend([offset] * len(char.lower()))
+        normalized: list[str] = []
+        offsets: list[int] = []
+        translations: dict[str, str] = {}
+        for char, offset in zip(self.text.lower(), lower_offsets):
+            if char not in translations:
+                cleaned = self.remove_punctuation(self.remove_apostrophes_and_hyphens(char))
+                translations[char] = "".join(c if c.isalnum() else " " for c in cleaned)
+            for replacement in translations[char]:
+                normalized.append(replacement)
+                offsets.append(offset)
+        excluded = set(self.extract_words(self.to_lower(list(stop_words))))
+        words: list[str] = []
+        spans: list[tuple[int, int]] = []
+        for match in re.finditer(r"\S+", "".join(normalized)):
+            if match.group() not in excluded:
+                words.append(match.group())
+                spans.append((offsets[match.start()], offsets[match.end() - 1] + 1))
+        return self.word_stem(words), spans

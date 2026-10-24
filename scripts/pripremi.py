@@ -32,7 +32,8 @@ pipeline.napravi_trie()
 # K-gramski indeks ostaje za kasnije.
 
 # Invertovani indeks
-pipeline.napravi_indeks()
+indeks = pipeline.napravi_indeks()
+print(f"Pozicioni indeks: {len(indeks.index):,} termina", flush=True)
 
 # TF-IDF model
 pipeline.napravi_tfidf()

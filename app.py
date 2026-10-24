@@ -140,7 +140,13 @@ def ucitaj_labele_autoplay():
 
 @st.cache_data
 def ucitaj_katalog_po_id():
-    pass
+    return ucitaj_katalog().set_index("katalog_id", drop=False)
+
+
+@st.cache_data(max_entries=200)
+def napravi_isecke(lyrics, hits):
+    from mrvectorbeat.search.lyrics_search import make_snippets
+    return make_snippets(lyrics, hits)
 
 
 @st.cache_resource
@@ -163,12 +169,17 @@ def ucitaj_sbert_vektore():
     pass
 
 
-ind = ucitaj_indeks()
 porodice = ucitaj_porodice()
 try:
     df = ucitaj_katalog()
 except FileNotFoundError:
     df = None
+try:
+    ind = ucitaj_indeks() if df is not None else None
+    index_error = ""
+except (FileNotFoundError, ValueError) as error:
+    ind = None
+    index_error = str(error)
 stablo = ucitaj_trie() if df is not None else None
 izvodjaci = ucitaj_izvodjace()
 # SBERT i Ollama se ucitavaju odmah pri pokretanju - trebaju i "Po smislu"
@@ -263,7 +274,58 @@ elif strana == "Stihovi":
     st.title("Pretraga po stihovima")
     st.caption("Pretrazuje sadrzaj pesama, ne naslove.")
 
-    # Koristi: ind, ucitaj_tfidf(), porodice, df, prikaz.kartica()
+    if ind is None:
+        st.info(index_error or "Prvo pripremite katalog i indeks: python -m scripts.pripremi")
+    else:
+        from mrvectorbeat.search.lyrics_search import search_lyrics
+
+        mode_label = st.radio("Rezim pretrage", ["Bulova", "Frazna", "Blizina"], horizontal=True)
+        mode = {"Bulova": "boolean", "Frazna": "phrase", "Blizina": "proximity"}[mode_label]
+        operator = "AND"
+        distance = 3
+        if mode == "boolean":
+            operator = st.selectbox("Operator", ["AND", "OR", "DIFFERENCE"])
+            st.caption({"AND": "Pesma mora sadrzati sve unete termine.",
+                        "OR": "Pesma mora sadrzati bar jedan uneti termin.",
+                        "DIFFERENCE": "Pesma sadrzi prvi termin, a ne sadrzi nijedan od ostalih."}[operator])
+        elif mode == "proximity":
+            distance = st.number_input("Rastojanje manje od", min_value=1, value=3, step=1)
+            st.caption("Unesite dva termina. Redosled nije bitan; susedni tokeni imaju rastojanje 1.")
+        st.caption("Upit i stihovi se obradjuju isto: mala slova, tokenizacija, stop-reci, stemovanje. "
+                   "Fraza i rastojanje proveravaju se nad tako obradjenim tokenima.")
+        query = st.text_input("Unesite deo stihova", key="stihovi_upit")
+        if query.strip():
+            try:
+                results = search_lyrics(ind, query, mode, operator, distance)
+            except ValueError as error:
+                st.info(str(error))
+            else:
+                if not results.terms:
+                    st.info("Posle obrade upita nije ostao nijedan termin.")
+                elif not results.hits:
+                    st.info("Nema pesama koje odgovaraju upitu.")
+                else:
+                    st.caption("Obradjeni termini: " + ", ".join(results.terms))
+                    page_size = st.selectbox("Rezultata po strani", [10, 20, 50])
+                    total = len(results.hits)
+                    pages = (total + page_size - 1) // page_size
+                    selection = (query, mode, operator, distance, page_size)
+                    if st.session_state.get("stihovi_izbor") != selection:
+                        st.session_state["stihovi_strana"] = 1
+                        st.session_state["stihovi_izbor"] = selection
+                    page = st.number_input("Strana rezultata", min_value=1, max_value=pages,
+                                           step=1, key="stihovi_strana")
+                    st.caption(f"Ukupno pesama: {total:,} | Strana {page} od {pages}")
+                    catalog_by_id = ucitaj_katalog_po_id()
+                    start = (page - 1) * page_size
+                    for doc_id in list(results.hits)[start:start + page_size]:
+                        song = catalog_by_id.loc[doc_id]
+                        with st.container(border=True):
+                            st.text(f"{song['track_name']} — {song['track_artist']}")
+                            st.caption(f"Godina: {song['godina']} | Zanr: {song['playlist_genre']}")
+                            for snippet in napravi_isecke(song["lyrics"], results.hits[doc_id]):
+                                st.markdown('<div style="white-space: pre-wrap">' + snippet + '</div>',
+                                            unsafe_allow_html=True)
 
 
 # --- Jezicki model -----------------------------------------------------
