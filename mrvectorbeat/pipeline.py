@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
-from mrvectorbeat.trie.name_search import NameSearch
+from mrvectorbeat.search.name_search import NameSearch
 
 
 ROOT: Path = Path(__file__).resolve().parents[1]

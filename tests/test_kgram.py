@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from mrvectorbeat.kgram.kgram import KGram
-from mrvectorbeat.trie.name_search import NameSearch
+from mrvectorbeat.search.kgram.kgram import KGram
+from mrvectorbeat.search.name_search import NameSearch
 
 
 class KGramTests(unittest.TestCase):

@@ -2,8 +2,8 @@
 
 from collections.abc import Iterable
 
-from mrvectorbeat.trie.trie import Trie, ReverseTrie
-from mrvectorbeat.kgram.kgram import KGram
+from mrvectorbeat.search.trie.trie import Trie, ReverseTrie
+from mrvectorbeat.search.kgram.kgram import KGram
 
 
 class NameSearch:
