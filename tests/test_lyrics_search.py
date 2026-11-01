@@ -10,7 +10,7 @@ from mrvectorbeat.textprocessing.text_processor import TextProcessor
 class BooleanTests(unittest.TestCase):
     def test_catalog_ids_and_sorted_postings(self):
         index = PositionIndex([["love"], ["night", "love", "love"], []], [9, 3, 6])
-        self.assertEqual(index.index["love"], [(3, [1, 2]), (9, [0])])
+        self.assertEqual(index.index["love"], {3: [1, 2], 9: [0]})
         self.assertEqual(index.document_ids, [3, 6, 9])
         with self.assertRaises(ValueError):
             PositionIndex([[], []], [1, 1])

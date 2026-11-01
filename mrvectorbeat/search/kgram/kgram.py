@@ -1,18 +1,20 @@
 from collections import defaultdict
 import re
-from collections.abc import Iterable
 
 class KGram:
-    def __init__(self, dictionary: Iterable[str], k: int = 3):
+    def __init__(self, dictionary: dict[str], k: int = 3):
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
             raise ValueError("k mora biti pozitivan ceo broj")
+        
+        #Indeks je recnik:  k-gram -> skup reci koje ga sadrze
         self.index: dict[str, set[str]] = defaultdict(set)
         self.k = k
-        self.originals: dict[str, str] = {}
+        self.originals: dict[str, str] = {} #Mozda je jednostavnije da ovo bude set
         self.word_grams: dict[str, set[str]] = {}
         for word in dictionary:
             if not isinstance(word, str) or not word.strip():
                 continue
+
             key = word.casefold()
             if key in self.originals:
                 continue
@@ -46,8 +48,6 @@ class KGram:
                 marked_part = "$" + part
             if i == len(parts) - 1:
                 marked_part = marked_part + "$"
-
-            # Oba if-a mogu da vaze odjednom: upit bez zvezdice "beat" -> "$beat$".
 
             required_grams += [marked_part[j:j + self.k] for j in range(len(marked_part) - self.k + 1)]
 

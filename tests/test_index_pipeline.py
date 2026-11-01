@@ -23,7 +23,7 @@ class IndexPipelineTests(unittest.TestCase):
                 with patch.object(pipeline, "napravi_indeks", side_effect=AssertionError("Rebuild")):
                     loaded = pipeline.ucitaj_indeks()
                 self.assertEqual(loaded.index, built.index)
-                self.assertEqual(loaded.index["love"], [(2, [1]), (8, [0, 1])])
+                self.assertEqual(loaded.index["love"], {2: [1], 8: [0, 1]})
                 self.assertEqual(loaded.document_ids, [2, 5, 8])
                 self.assertEqual(loaded.find_boolean(["love", "night"]), [2])
                 self.assertEqual(loaded.find_phrase(["night", "love"]), [(2, 0)])

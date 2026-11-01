@@ -121,8 +121,8 @@ se pozicije prevode u raspone originalnog teksta; rezultati prikazuju
 do tri isecaka sa oznacenim pogocima, ukupan broj pesama i paginaciju.
 Prazan obradjeni upit vraca prazan rezultat.
 
-Struktura indeksa je `termin -> [(katalog_id, [pozicije]), ...]`.
-Postings i pozicije su sortirane liste. Bulova pretraga iz iste
+Struktura indeksa je `termin -> {katalog_id: [pozicije], ...}`.
+ID-evi se dodaju rastucim redosledom, a pozicije su sortirane liste. Bulova pretraga iz iste
 strukture izdvaja ID-eve, a frazna i blizina koriste i pozicije.
 Presek, unija i razlika rade sa dva pokazivaca; presek krece od
 najkrace liste i prekida obradu cim rezultat postane prazan.

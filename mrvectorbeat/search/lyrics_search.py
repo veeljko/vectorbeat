@@ -1,6 +1,5 @@
 """Pretraga nad jednim indeksom i iseci originalnih stihova."""
 
-from bisect import bisect_left
 from dataclasses import dataclass
 from html import escape
 
@@ -35,10 +34,8 @@ def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
         for doc_id in documents:
             hits: list[tuple[int, int]] = []
             for term in matched_terms:
-                postings = index.index.get(term, [])
-                cursor = bisect_left(postings, doc_id, key=lambda posting: posting[0])
-                if cursor < len(postings) and postings[cursor][0] == doc_id:
-                    hits.extend((position, position + 1) for position in postings[cursor][1])
+                positions = index.index.get(term, {}).get(doc_id, [])
+                hits.extend((position, position + 1) for position in positions)
             results.hits[doc_id] = sorted(hits)
     else:
         raise ValueError("Nepoznat rezim pretrage.")

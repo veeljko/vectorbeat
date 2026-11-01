@@ -9,8 +9,8 @@ from mrvectorbeat.search.indexes.position_index import PositionIndex
 class PhraseTests(unittest.TestCase):
     def test_document_positions(self):
         index = PositionIndex([['love', 'night', 'love'], [], ['night']])
-        self.assertEqual(index.index['love'], [(0, [0, 2])])
-        self.assertEqual(index.index['night'], [(0, [1]), (2, [0])])
+        self.assertEqual(index.index['love'], {0: [0, 2]})
+        self.assertEqual(index.index['night'], {0: [1], 2: [0]})
 
     def test_order_and_adjacency(self):
         index = PositionIndex([

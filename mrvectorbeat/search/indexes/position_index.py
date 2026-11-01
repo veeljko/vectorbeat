@@ -1,29 +1,35 @@
+from collections import defaultdict
+
+
 class PositionIndex:
     def __init__(self, tokens: list[list[str]], document_ids: list[int] | None = None):
         """Svaka unutrasnja lista sadrzi obradjene tokene jednog dokumenta.
 
         ID dokumenta je katalog_id, ili indeks u ulazu ako ID-evi nisu dati.
-        Postings su sortirane liste parova (doc_id, lista pozicija).
+        Indeks je recnik: term -> {doc_id: lista pozicija}.
         """
         if document_ids is None:
             document_ids = list(range(len(tokens)))
         if len(document_ids) != len(tokens):
             raise ValueError("Svaki dokument mora imati svoj ID.")
+
+
         documents = sorted(zip(document_ids, tokens), key=lambda item: item[0])
         self.document_ids = [doc_id for doc_id, _ in documents]
         if any(a == b for a, b in zip(self.document_ids, self.document_ids[1:])):
             raise ValueError("ID-evi dokumenata moraju biti jedinstveni.")
-        self.index: dict[str, list[tuple[int, list[int]]]] = {}
-        for doc_id, document in documents:
-            for pos, term in enumerate(document):
-                postings = self.index.setdefault(term, [])
-                if not postings or postings[-1][0] != doc_id:
-                    postings.append((doc_id, []))
-                postings[-1][1].append(pos)
 
+        
+        indeks = defaultdict(dict)
+        for doc_id, tokens in documents:
+            for pos, token in enumerate(tokens):
+                indeks[token].setdefault(doc_id, []).append(pos)
+        
+        self.index: dict[str, dict[int, list[int]]] = dict(indeks)
+ 
     def get_documents(self, word: str) -> list[int]:
-        """ID-eve izdvajamo iz istog pozicionog indeksa za svaki tip upita."""
-        return [doc_id for doc_id, _ in self.index.get(word, [])]
+        #Vraca ID-jeve dokumenata gde se nalazi word
+        return list(self.index.get(word, {}))
 
     def find_boolean(self, words: list[str], operator: str = "AND") -> list[int]:
         """AND: sve reci; OR: bar jedna; DIFFERENCE: prva bez svih ostalih."""
@@ -36,8 +42,11 @@ class PositionIndex:
         if operator == "AND":
             candidates.sort(key=len)
         result = candidates[0]
-        operation = {"AND": self.intersection, "OR": self.union,
-                     "DIFFERENCE": self.difference}[operator]
+        operation = {"AND": self.intersection, 
+                     "OR": self.union,
+                     "DIFFERENCE": self.difference
+        }[operator]
+                     
         for candidate in candidates[1:]:
             if not result and operator != "OR":
                 break
@@ -48,9 +57,12 @@ class PositionIndex:
         """Vrati sve (doc_id, pocetna_pozicija) pogotke obradjene fraze."""
         if not words:
             return []
-        postings = [self.index.get(word, []) for word in words]
-        candidates = [[doc_id for doc_id, _ in posting] for posting in postings]
+
+        
+        postings = [self.index.get(word, {}) for word in words]
+        candidates = [list(posting) for posting in postings]
         candidates.sort(key=len)
+
         documents = candidates[0]
         for candidate in candidates[1:]:
             if not documents:
@@ -60,23 +72,13 @@ class PositionIndex:
                 return []
         
         result: list[tuple[int, int]] = []
-        cursors = [0] * len(words)
         for doc_id in documents:
-            positions: list[list[int]] = []
-            for i, posting in enumerate(postings):
-                while posting[cursors[i]][0] < doc_id:
-                    cursors[i] += 1
-                positions.append(posting[cursors[i]][1])
+            positions = [self.index[word][doc_id] for word in words]
 
-            starts = positions[0]
-            for offset, following in enumerate(positions[1:], start=1):
-                # Uslov p + offset u following jednak je p u pomerenoj listi.
-                # Npr. za drugu rec [3, 7] moguci poceci su [2, 6].
-                shifted = [position - offset for position in following]
-                starts = self.intersection(starts, shifted)
-                if not starts:
-                    break
-            result.extend((doc_id, start) for start in starts)
+            for p in positions[0]:
+                if all(p + i in positions[i] for i in range(1, len(words))):
+                    result.append((doc_id, p))
+        
         return result
 
     def find_proximity(self, a: str, b: str, distance: int) -> list[tuple[int, int, int]]:
@@ -89,21 +91,18 @@ class PositionIndex:
             raise ValueError("distance mora biti nenegativan ceo broj")
         if not a or not b or distance <= 1:
             return []
-        first = self.index.get(a, [])
-        second = self.index.get(b, [])
+
+        
+        first = self.index.get(a, {})
+        second = self.index.get(b, {})
         documents = self.intersection(
-            [doc_id for doc_id, _ in first],
-            [doc_id for doc_id, _ in second],
+            list(first),
+            list(second),
         )
         result: list[tuple[int, int, int]] = []
-        first_cursor = second_cursor = 0
         for doc_id in documents:
-            while first[first_cursor][0] < doc_id:
-                first_cursor += 1
-            while second[second_cursor][0] < doc_id:
-                second_cursor += 1
-            positions_a = first[first_cursor][1]
-            positions_b = second[second_cursor][1]
+            positions_a = first[doc_id]
+            positions_b = second[doc_id]
 
             # Klizni prozor u sortiranoj listi pozicija druge reci.
             left = right = 0
