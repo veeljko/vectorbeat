@@ -154,6 +154,85 @@ def napravi_isecke(lyrics, hits):
     return make_snippets(lyrics, hits)
 
 
+@st.cache_data(max_entries=20)
+def pronadji_slicne_pesme(doc_id):
+    from mrvectorbeat.search.lyrics_search import search_similar_lyrics
+    return search_similar_lyrics(ucitaj_indeks(), doc_id, measure="cosine",
+                                families=ucitaj_porodice_po_id(), include_hits=False)
+
+
+@st.cache_data(max_entries=50)
+def uporedi_tekstove(source_id, target_id):
+    from mrvectorbeat.search.lyrics_search import compare_lyrics
+    catalog = ucitaj_katalog_po_id()
+    return compare_lyrics(ucitaj_indeks(), source_id, target_id,
+                          catalog.loc[source_id, "lyrics"], catalog.loc[target_id, "lyrics"])
+
+
+def prikazi_slicne_pesme(source_id):
+    catalog = ucitaj_katalog_po_id()
+    source = catalog.loc[source_id]
+    st.divider()
+    st.subheader("Slične pesme")
+    st.text(f"Izabrana pesma: {source['track_name']} — {source['track_artist']}")
+    st.caption("Redosled je po kosinusnoj sličnosti (lnc.ltc), nezavisno od mere za početni upit. "
+               "Verzije izabrane pesme su izostavljene; svaka druga porodica prikazana je jednom.")
+    similar = pronadji_slicne_pesme(source_id)
+    if not similar.scores:
+        st.info("Nema drugih pesama sa zajedničkim rečima izvan porodice izabrane pesme.")
+        return
+    page_size = st.selectbox("Sličnih pesama po strani", [5, 10, 20], key="slicne_velicina")
+    selection = (source_id, page_size)
+    if st.session_state.get("slicne_izbor") != selection:
+        st.session_state["slicne_strana"] = 1
+        st.session_state["slicne_izbor"] = selection
+    pages = (len(similar.scores) + page_size - 1) // page_size
+    page = st.number_input("Strana sličnih pesama", min_value=1, max_value=pages,
+                           step=1, key="slicne_strana")
+    st.caption(f"Ukupno sličnih pesama: {len(similar.scores):,}")
+    start = (page - 1) * page_size
+    for other_id in list(similar.scores)[start:start + page_size]:
+        other = catalog.loc[other_id]
+        with st.container(border=True):
+            st.text(f"{other['track_name']} — {other['track_artist']}")
+            st.caption(f"Kosinusna sličnost: {similar.scores[other_id]:.6f}")
+            if st.button("Uporedi tekstove", key=f"uporedi_{source_id}_{other_id}"):
+                st.session_state["stihovi_poredjenje"] = other_id
+    target_id = st.session_state.get("stihovi_poredjenje")
+    if target_id not in similar.scores:
+        return
+    target = catalog.loc[target_id]
+    comparison = uporedi_tekstove(source_id, target_id)
+    st.subheader("Poređenje tekstova")
+    st.caption(f"Kosinusna sličnost para: {comparison.similarity:.6f}")
+    columns = st.columns(2)
+    for column, song, html in zip(columns, (source, target),
+                                  (comparison.source_html, comparison.target_html)):
+        with column:
+            st.text(f"{song['track_name']} — {song['track_artist']}")
+            with st.container(height=500, border=True):
+                st.markdown('<div style="white-space: pre-wrap">' + html + '</div>',
+                            unsafe_allow_html=True)
+    st.subheader("Reči koje najviše doprinose sličnosti")
+    st.caption("Do deset obrađenih termina, sa svim njihovim oblicima istaknutim u oba teksta. "
+               "Udeo se računa u odnosu na ukupan doprinos svih zajedničkih termina.")
+    if not comparison.terms:
+        st.info("Ovaj par nema termine sa pozitivnim doprinosom; kosinusna sličnost je 0.")
+        return
+    rows = [{"Reč / osnova": item.term,
+             "Broj u izabranoj pesmi": item.source_count,
+             "Broj u sličnoj pesmi": item.target_count,
+             "Doprinos sličnosti": item.contribution,
+             "Udeo ukupne sličnosti (%)": 100 * item.share}
+            for item in comparison.terms]
+    st.dataframe(rows, hide_index=True, width="stretch", column_config={
+        "Doprinos sličnosti": st.column_config.NumberColumn(format="%.6f"),
+        "Udeo ukupne sličnosti (%)": st.column_config.NumberColumn(format="%.2f"),
+    })
+    coverage = sum(item.share for item in comparison.terms)
+    st.caption(f"Prikazanih {len(rows)} termina objašnjava {coverage:.1%} ukupne sličnosti.")
+
+
 @st.cache_resource
 def ucitaj_jezicki(mu):
     pass
@@ -282,7 +361,7 @@ elif strana == "Stihovi":
     if ind is None:
         st.info(index_error or "Prvo pripremite katalog i indeks: python -m scripts.pripremi")
     else:
-        from mrvectorbeat.search.lyrics_search import search_lyrics, search_similar_lyrics
+        from mrvectorbeat.search.lyrics_search import search_lyrics
 
         mode_label = st.radio("Rezim pretrage", ["Bulova", "Frazna", "Blizina", "Rangirano"], horizontal=True)
         mode = {"Bulova": "boolean", "Frazna": "phrase", "Blizina": "proximity",
@@ -305,6 +384,11 @@ elif strana == "Stihovi":
         st.caption("Upit i stihovi se obradjuju isto: mala slova, tokenizacija, stop-reci, stemovanje. "
                    "Fraza i rastojanje proveravaju se nad tako obradjenim tokenima.")
         query = st.text_input("Unesite deo stihova", key="stihovi_upit")
+        context = (query, mode, operator, distance, measure)
+        if st.session_state.get("stihovi_kontekst") != context:
+            st.session_state.pop("stihovi_slicne_izvor", None)
+            st.session_state.pop("stihovi_poredjenje", None)
+            st.session_state["stihovi_kontekst"] = context
         if query.strip():
             try:
                 results = search_lyrics(ind, query, mode, operator, distance, measure,
@@ -340,17 +424,12 @@ elif strana == "Stihovi":
                             for snippet in napravi_isecke(song["lyrics"], results.hits[doc_id]):
                                 st.markdown('<div style="white-space: pre-wrap">' + snippet + '</div>',
                                             unsafe_allow_html=True)
-                            if mode == "ranked" and st.button("Slicne pesme po stihovima", key=f"slicne_{doc_id}"):
-                                similar = search_similar_lyrics(ind, doc_id, measure, ucitaj_porodice_po_id())
-                                if not similar.hits:
-                                    st.info("Nema drugih pesama sa zajednickim recima.")
-                                for other_id in list(similar.hits)[:5]:
-                                    other = catalog_by_id.loc[other_id]
-                                    st.text(f"{other['track_name']} — {other['track_artist']}")
-                                    st.caption(f"Ocena ({measure_label}): {similar.scores[other_id]:.6f}")
-                                    for snippet in napravi_isecke(other["lyrics"], similar.hits[other_id]):
-                                        st.markdown('<div style="white-space: pre-wrap">' + snippet + '</div>',
-                                                    unsafe_allow_html=True)
+                            if st.button("Slične pesme", key=f"slicne_{doc_id}"):
+                                st.session_state["stihovi_slicne_izvor"] = doc_id
+                                st.session_state.pop("stihovi_poredjenje", None)
+                    source_id = st.session_state.get("stihovi_slicne_izvor")
+                    if source_id is not None:
+                        prikazi_slicne_pesme(source_id)
 
 
 # --- Jezicki model -----------------------------------------------------

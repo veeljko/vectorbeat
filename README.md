@@ -119,6 +119,24 @@ Posle ponovne pripreme artefakata restartujte aplikaciju.
   verzija svake pesme prema koloni `porodica` iz prve nedelje.
   Uz pesmu se vide ocena, oznaceni iseci i dugme za slicne pesme po stihovima.
 
+Dugme **Slicne pesme** otvara zasebnu, paginiranu listu koja uvek koristi
+kosinusnu slicnost lnc.ltc, cak i kada je pocetni upit rangiran TF-IDF merom.
+Izabrana pesma sluzi kao ltc upit, a kandidati su lnc dokumenti. Njena
+porodica je izostavljena, a ostale porodice imaju po jednog najboljeg
+predstavnika. Lista ostaje otvorena dok korisnik bira **Uporedi tekstove**.
+
+Poredjenje prikazuje originalne tekstove jedan pored drugog i do deset
+termina sa najvecim doprinosom istoj kosinusnoj oceni. Za svaki termin
+prikazuju se frekvencije u oba teksta, njegov doprinos oceni i procenat
+ukupne slicnosti. Doprinos je proizvod tezine ltc izabrane pesme i tezine
+lnc druge pesme, podeljen njihovim sacuvanim normama. Procenti se racunaju
+prema svim zajednickim terminima, pa prvih deset ne mora dati 100%.
+Svi izvorni oblici tih stemovanih termina oznaceni su u oba teksta.
+Ako nema pozitivnih doprinosa, prikazuje se ocena 0 i poruka bez deljenja nulom.
+Za listu se citaju samo postings liste termina izabrane pesme; za
+objasnjenje samo sacuvane tezine, frekvencije i norme izabranog para.
+Rezultati slicnih pesama i poredjenja se kesiraju, bez ponovne gradnje modela.
+
 TF-IDF ocena je suma `(1 + log10(tf_d)) * log10(N / df)` za tokene upita;
 ponavljanje termina u upitu ponavlja njegov doprinos. Kod lnc.ltc dokument
 koristi logaritamski TF bez IDF-a, upit koristi logaritamski TF puta IDF,

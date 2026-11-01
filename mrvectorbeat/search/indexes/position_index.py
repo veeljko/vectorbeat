@@ -260,6 +260,19 @@ class PositionIndex:
         scores.pop(doc_id, None)
         return scores
 
+    def similarity_contributions(self, source_id: int, target_id: int) -> dict[str, float]:
+        """Doprinosi termina istoj lnc.ltc oceni kao u score_similar(source_id)."""
+        source = self.document_weights[source_id]
+        target = self.document_weights[target_id]
+        denominator = self.document_query_norms[source_id] * self.document_norms[target_id]
+        if not denominator:
+            return {}
+        return {
+            term: source[term] * self.idf_values[term] * target[term] / denominator
+            for term in sorted(source.keys() & target.keys())
+            if self.idf_values[term] > 0
+        }
+
     def build_vec(self, tokens: list[str], use_idf: bool) -> tuple[dict[str, float], float]:
         """Vraca tezine po terminu i normu vektora."""
         tezine = {}

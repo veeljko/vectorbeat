@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from html import escape
+import math
 
 from mrvectorbeat.search.indexes.position_index import PositionIndex
 from mrvectorbeat.textprocessing.text_processor import TextProcessor
@@ -18,7 +19,8 @@ class LyricsResults:
 
 def _ranked_results(index: PositionIndex, terms: list[str], scores: dict[int, float],
                     families: Mapping[int, str] | None = None,
-                    exclude_doc: int | None = None) -> LyricsResults:
+                    exclude_doc: int | None = None,
+                    include_hits: bool = True) -> LyricsResults:
     """Najbolja verzija svake porodice; redosled recnika je rang rezultata."""
     results = LyricsResults(terms, {})
     unique_terms = set(terms)
@@ -35,15 +37,62 @@ def _ranked_results(index: PositionIndex, terms: list[str], scores: dict[int, fl
             (position, position + 1)
             for term in unique_terms
             for position in index.index.get(term, {}).get(doc_id, [])
-        )
+        ) if include_hits else []
     return results
 
 
 def search_similar_lyrics(index: PositionIndex, doc_id: int, measure: str = "cosine",
-                         families: Mapping[int, str] | None = None) -> LyricsResults:
+                         families: Mapping[int, str] | None = None,
+                         include_hits: bool = True) -> LyricsResults:
     terms = sorted(index.document_weights[doc_id])
     return _ranked_results(index, terms, index.score_similar(doc_id, measure),
-                           families, exclude_doc=doc_id)
+                           families, exclude_doc=doc_id, include_hits=include_hits)
+
+
+@dataclass(frozen=True)
+class TermContribution:
+    term: str
+    source_count: int
+    target_count: int
+    contribution: float
+    share: float
+
+
+@dataclass
+class LyricsComparison:
+    similarity: float
+    terms: list[TermContribution]
+    source_html: str
+    target_html: str
+
+
+def highlight_terms(lyrics: str, terms: set[str]) -> str:
+    """Oznaci sve izvorne oblike trazenih stemova, uz ocuvan i escapovan tekst."""
+    if not terms:
+        return escape(lyrics)
+    tokens, spans = TextProcessor(lyrics).tokenize_with_spans()
+    parts = []
+    cursor = 0
+    for token, (start, end) in zip(tokens, spans):
+        if token in terms:
+            parts.extend((escape(lyrics[cursor:start]), "<mark>", escape(lyrics[start:end]), "</mark>"))
+            cursor = end
+    parts.append(escape(lyrics[cursor:]))
+    return "".join(parts)
+
+
+def compare_lyrics(index: PositionIndex, source_id: int, target_id: int,
+                   source_lyrics: str, target_lyrics: str, limit: int = 10) -> LyricsComparison:
+    contributions = index.similarity_contributions(source_id, target_id)
+    total = math.fsum(contributions.values())
+    terms = [
+        TermContribution(term, index.directory[term][source_id], index.directory[term][target_id],
+                         contributions[term], contributions[term] / total)
+        for term in sorted(contributions, key=lambda term: (-contributions[term], term))[:limit]
+    ]
+    highlighted = {item.term for item in terms}
+    return LyricsComparison(total, terms, highlight_terms(source_lyrics, highlighted),
+                            highlight_terms(target_lyrics, highlighted))
 
 
 def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
