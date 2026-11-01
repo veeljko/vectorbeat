@@ -25,6 +25,9 @@ class IndexPipelineTests(unittest.TestCase):
                 self.assertEqual(loaded.index, built.index)
                 self.assertEqual(loaded.index["love"], {2: [1], 8: [0, 1]})
                 self.assertEqual(loaded.document_ids, [2, 5, 8])
+                self.assertEqual(loaded.idf_values, built.idf_values)
+                self.assertEqual(loaded.document_norms, built.document_norms)
+                self.assertEqual(loaded.document_query_norms, built.document_query_norms)
                 self.assertEqual(loaded.find_boolean(["love", "night"]), [2])
                 self.assertEqual(loaded.find_phrase(["night", "love"]), [(2, 0)])
 

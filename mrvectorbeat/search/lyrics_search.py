@@ -1,6 +1,7 @@
 """Pretraga nad jednim indeksom i iseci originalnih stihova."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from html import escape
 
 from mrvectorbeat.search.indexes.position_index import PositionIndex
@@ -12,14 +13,49 @@ class LyricsResults:
     terms: list[str]
     # katalog_id -> svi pogodjeni rasponi obradjenih tokena [pocetak, kraj).
     hits: dict[int, list[tuple[int, int]]]
+    scores: dict[int, float] = field(default_factory=dict)
+
+
+def _ranked_results(index: PositionIndex, terms: list[str], scores: dict[int, float],
+                    families: Mapping[int, str] | None = None,
+                    exclude_doc: int | None = None) -> LyricsResults:
+    """Najbolja verzija svake porodice; redosled recnika je rang rezultata."""
+    results = LyricsResults(terms, {})
+    unique_terms = set(terms)
+    seen = set()
+    if families is not None and exclude_doc in families:
+        seen.add(families[exclude_doc])
+    for doc_id in sorted(scores, key=lambda doc_id: (-scores[doc_id], doc_id)):
+        family = families.get(doc_id, doc_id) if families is not None else doc_id
+        if family in seen:
+            continue
+        seen.add(family)
+        results.scores[doc_id] = scores[doc_id]
+        results.hits[doc_id] = sorted(
+            (position, position + 1)
+            for term in unique_terms
+            for position in index.index.get(term, {}).get(doc_id, [])
+        )
+    return results
+
+
+def search_similar_lyrics(index: PositionIndex, doc_id: int, measure: str = "cosine",
+                         families: Mapping[int, str] | None = None) -> LyricsResults:
+    terms = sorted(index.document_weights[doc_id])
+    return _ranked_results(index, terms, index.score_similar(doc_id, measure),
+                           families, exclude_doc=doc_id)
 
 
 def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
-                  operator: str = "AND", distance: int = 3) -> LyricsResults:
+                  operator: str = "AND", distance: int = 3,
+                  measure: str = "tfidf",
+                  families: Mapping[int, str] | None = None) -> LyricsResults:
     terms = TextProcessor(query).text_tokenize()
     results = LyricsResults(terms, {})
     if not terms:
         return results
+    if mode == "ranked":
+        return _ranked_results(index, terms, index.score_ranked(terms, measure), families)
     if mode == "phrase":
         for doc_id, position in index.find_phrase(terms):
             results.hits.setdefault(doc_id, []).append((position, position + len(terms)))

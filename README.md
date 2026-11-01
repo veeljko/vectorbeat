@@ -113,6 +113,27 @@ Posle ponovne pripreme artefakata restartujte aplikaciju.
 - **Blizina**: posle obrade moraju ostati dva termina; trazi se
   `abs(pozicija_a - pozicija_b) < rastojanje`, u oba redosleda.
   Za rastojanje 2 prolaze susedni tokeni; za 1 nema pogodaka.
+- **Rangirano**: bira se TF-IDF ili kosinusna slicnost po shemi lnc.ltc.
+  Rezultati se sortiraju opadajuce po oceni, sa katalog ID-em kao pravilom
+  za izjednacene ocene. Pre paginacije ostaje samo najbolje ocenjena
+  verzija svake pesme prema koloni `porodica` iz prve nedelje.
+  Uz pesmu se vide ocena, oznaceni iseci i dugme za slicne pesme po stihovima.
+
+TF-IDF ocena je suma `(1 + log10(tf_d)) * log10(N / df)` za tokene upita;
+ponavljanje termina u upitu ponavlja njegov doprinos. Kod lnc.ltc dokument
+koristi logaritamski TF bez IDF-a, upit koristi logaritamski TF puta IDF,
+a skalarni proizvod se deli proizvodom euklidskih normi. Norma dokumenta
+obuhvata sve njegove termine. Prazan vektor ili upit sa svim IDF-ovima
+jednakim nuli daje kosinusnu ocenu 0, bez deljenja nulom.
+
+IDF, logaritamske tezine i norme svih pesama (lnc i ltc) racunaju se pri gradnji
+`PositionIndex` i cuvaju u zajednickom artefaktu
+`artifacts/pozicioni_indeks.pkl`. `ucitaj_tfidf()` cita isti gotov model.
+Upiti ne grade model i ne racunaju ponovo statistiku korpusa. Kandidati
+su iskljucivo unija postings lista termina upita. Za slicne pesme isti
+postupak koristi termine izabrane pesme i izostavlja celu njenu porodicu.
+Ako nema zajednickih termina, prikazuje se poruka da nema rezultata.
+Posle promene formata modela ponovo izgradite indeks i restartujte aplikaciju.
 
 Upit prolazi istu obradu kao stihovi. Pozicije pocinju od nule i odnose
 se na tokene posle uklanjanja stop-reci i stemovanja. Zato fraza

@@ -143,6 +143,11 @@ def ucitaj_katalog_po_id():
     return ucitaj_katalog().set_index("katalog_id", drop=False)
 
 
+@st.cache_data
+def ucitaj_porodice_po_id():
+    return ucitaj_katalog_po_id()["porodica"].to_dict()
+
+
 @st.cache_data(max_entries=200)
 def napravi_isecke(lyrics, hits):
     from mrvectorbeat.search.lyrics_search import make_snippets
@@ -277,12 +282,14 @@ elif strana == "Stihovi":
     if ind is None:
         st.info(index_error or "Prvo pripremite katalog i indeks: python -m scripts.pripremi")
     else:
-        from mrvectorbeat.search.lyrics_search import search_lyrics
+        from mrvectorbeat.search.lyrics_search import search_lyrics, search_similar_lyrics
 
-        mode_label = st.radio("Rezim pretrage", ["Bulova", "Frazna", "Blizina"], horizontal=True)
-        mode = {"Bulova": "boolean", "Frazna": "phrase", "Blizina": "proximity"}[mode_label]
+        mode_label = st.radio("Rezim pretrage", ["Bulova", "Frazna", "Blizina", "Rangirano"], horizontal=True)
+        mode = {"Bulova": "boolean", "Frazna": "phrase", "Blizina": "proximity",
+                "Rangirano": "ranked"}[mode_label]
         operator = "AND"
         distance = 3
+        measure = "tfidf"
         if mode == "boolean":
             operator = st.selectbox("Operator", ["AND", "OR", "DIFFERENCE"])
             st.caption({"AND": "Pesma mora sadrzati sve unete termine.",
@@ -291,12 +298,17 @@ elif strana == "Stihovi":
         elif mode == "proximity":
             distance = st.number_input("Rastojanje manje od", min_value=1, value=3, step=1)
             st.caption("Unesite dva termina. Redosled nije bitan; susedni tokeni imaju rastojanje 1.")
+        elif mode == "ranked":
+            measure_label = st.selectbox("Mera slicnosti", ["TF-IDF", "Kosinusna (lnc.ltc)"])
+            measure = "tfidf" if measure_label == "TF-IDF" else "cosine"
+            st.caption("Pesme su poredjane od najvece ocene. Prikazuje se najbolje ocenjena verzija svake pesme.")
         st.caption("Upit i stihovi se obradjuju isto: mala slova, tokenizacija, stop-reci, stemovanje. "
                    "Fraza i rastojanje proveravaju se nad tako obradjenim tokenima.")
         query = st.text_input("Unesite deo stihova", key="stihovi_upit")
         if query.strip():
             try:
-                results = search_lyrics(ind, query, mode, operator, distance)
+                results = search_lyrics(ind, query, mode, operator, distance, measure,
+                                        ucitaj_porodice_po_id() if mode == "ranked" else None)
             except ValueError as error:
                 st.info(str(error))
             else:
@@ -309,7 +321,7 @@ elif strana == "Stihovi":
                     page_size = st.selectbox("Rezultata po strani", [10, 20, 50])
                     total = len(results.hits)
                     pages = (total + page_size - 1) // page_size
-                    selection = (query, mode, operator, distance, page_size)
+                    selection = (query, mode, operator, distance, measure, page_size)
                     if st.session_state.get("stihovi_izbor") != selection:
                         st.session_state["stihovi_strana"] = 1
                         st.session_state["stihovi_izbor"] = selection
@@ -323,9 +335,22 @@ elif strana == "Stihovi":
                         with st.container(border=True):
                             st.text(f"{song['track_name']} — {song['track_artist']}")
                             st.caption(f"Godina: {song['godina']} | Zanr: {song['playlist_genre']}")
+                            if doc_id in results.scores:
+                                st.caption(f"Ocena ({measure_label}): {results.scores[doc_id]:.6f}")
                             for snippet in napravi_isecke(song["lyrics"], results.hits[doc_id]):
                                 st.markdown('<div style="white-space: pre-wrap">' + snippet + '</div>',
                                             unsafe_allow_html=True)
+                            if mode == "ranked" and st.button("Slicne pesme po stihovima", key=f"slicne_{doc_id}"):
+                                similar = search_similar_lyrics(ind, doc_id, measure, ucitaj_porodice_po_id())
+                                if not similar.hits:
+                                    st.info("Nema drugih pesama sa zajednickim recima.")
+                                for other_id in list(similar.hits)[:5]:
+                                    other = catalog_by_id.loc[other_id]
+                                    st.text(f"{other['track_name']} — {other['track_artist']}")
+                                    st.caption(f"Ocena ({measure_label}): {similar.scores[other_id]:.6f}")
+                                    for snippet in napravi_isecke(other["lyrics"], similar.hits[other_id]):
+                                        st.markdown('<div style="white-space: pre-wrap">' + snippet + '</div>',
+                                                    unsafe_allow_html=True)
 
 
 # --- Jezicki model -----------------------------------------------------

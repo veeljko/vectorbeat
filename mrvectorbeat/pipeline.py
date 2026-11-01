@@ -251,17 +251,20 @@ def ucitaj_indeks() -> PositionIndex:
         if source.exists() and source.stat().st_mtime_ns > INDEKS_PATH.stat().st_mtime_ns:
             raise ValueError("Indeks je zastareo. Pokreni: python -m scripts.pripremi")
     with INDEKS_PATH.open("rb") as source:
-        return pickle.load(source)
+        index = pickle.load(source)
+    if getattr(index, "ranking_version", None) != 1:
+        raise ValueError("Indeks nema pripremljene tezine za rangiranje. Pokreni: python -m scripts.pripremi")
+    return index
 
 
-def napravi_tfidf() -> None:
-    """Gradi TF-IDF model i snima ga u artifacts/."""
-    pass
+def napravi_tfidf() -> PositionIndex:
+    """Tezine i norme vec su izgradjene i sacuvane u pozicionom indeksu."""
+    return ucitaj_indeks()
 
 
-def ucitaj_tfidf() -> None:
-    """Cita gotov TF-IDF model iz artifacts/."""
-    pass
+def ucitaj_tfidf() -> PositionIndex:
+    """Cita zajednicki artefakt za TF-IDF, kosinusnu i pozicionu pretragu."""
+    return ucitaj_indeks()
 
 
 def napravi_bm25() -> None:
