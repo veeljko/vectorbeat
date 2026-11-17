@@ -154,6 +154,14 @@ def napravi_isecke(lyrics, hits):
     return make_snippets(lyrics, hits)
 
 
+@st.cache_data(max_entries=50)
+def pretrazi_stihove(query, mode, operator, distance, measure):
+    """Sacuvaj rezultate upita i tokom izbora slicne pesme ili poredjenja."""
+    from mrvectorbeat.search.lyrics_search import search_lyrics
+    return search_lyrics(ucitaj_indeks(), query, mode, operator, distance, measure,
+                         ucitaj_porodice_po_id() if mode == "ranked" else None)
+
+
 @st.cache_data(max_entries=20)
 def pronadji_slicne_pesme(doc_id):
     from mrvectorbeat.search.lyrics_search import search_similar_lyrics
@@ -361,8 +369,6 @@ elif strana == "Stihovi":
     if ind is None:
         st.info(index_error or "Prvo pripremite katalog i indeks: python -m scripts.pripremi")
     else:
-        from mrvectorbeat.search.lyrics_search import search_lyrics
-
         mode_label = st.radio("Rezim pretrage", ["Bulova", "Frazna", "Blizina", "Rangirano"], horizontal=True)
         mode = {"Bulova": "boolean", "Frazna": "phrase", "Blizina": "proximity",
                 "Rangirano": "ranked"}[mode_label]
@@ -391,8 +397,7 @@ elif strana == "Stihovi":
             st.session_state["stihovi_kontekst"] = context
         if query.strip():
             try:
-                results = search_lyrics(ind, query, mode, operator, distance, measure,
-                                        ucitaj_porodice_po_id() if mode == "ranked" else None)
+                results = pretrazi_stihove(query, mode, operator, distance, measure)
             except ValueError as error:
                 st.info(str(error))
             else:

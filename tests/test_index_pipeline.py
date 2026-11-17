@@ -30,6 +30,15 @@ class IndexPipelineTests(unittest.TestCase):
                 self.assertEqual(loaded.document_query_norms, built.document_query_norms)
                 self.assertEqual(loaded.find_boolean(["love", "night"]), [2])
                 self.assertEqual(loaded.find_phrase(["night", "love"]), [(2, 0)])
+                expected_scores = built.score_similar(2)
+                expected_contributions = built.similarity_contributions(2, 8)
+                # Ucitavanje i slicnost citaju sacuvane statistike, bez nove gradnje.
+                with patch.object(pipeline, "PositionIndex", side_effect=AssertionError("Rebuild")), \
+                        patch("math.log10", side_effect=AssertionError("Ponovni IDF/TF")), \
+                        patch("math.sqrt", side_effect=AssertionError("Ponovna norma")):
+                    reloaded = pipeline.ucitaj_indeks()
+                    self.assertEqual(reloaded.score_similar(2), expected_scores)
+                    self.assertEqual(reloaded.similarity_contributions(2, 8), expected_contributions)
 
     def test_mismatched_catalog_and_tokens_rejected(self):
         catalog = pd.DataFrame({"katalog_id": [2], "track_id": ["a"]})
