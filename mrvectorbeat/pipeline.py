@@ -31,6 +31,8 @@ CSV_PATH: Path = ROOT / "data" / "spotify_songs.csv"
 KATALOG_PATH: Path = ARTIFACTS / "katalog.parquet"
 TOKENI_PATH: Path = ARTIFACTS / "tokeni.parquet"
 INDEKS_PATH: Path = ARTIFACTS / "pozicioni_indeks.pkl"
+QRELS_PATH: Path = ROOT / "data" / "qrels.csv"
+EVALUACIJA_PATH: Path = ARTIFACTS / "evaluacija.pkl"
 
 
 # Kolone koje zadrzavamo u katalogu. Sve ostalo iz CSV-a nam ne treba.
@@ -277,23 +279,52 @@ def ucitaj_bm25() -> PositionIndex:
     return ucitaj_indeks()
 
 
-def ucitaj_qrels(skup: str | None = None) -> None:
+def ucitaj_qrels(skup: str | None = None) -> pd.DataFrame:
     """Cita test upite iz data/qrels.csv.
 
     skup - "poznata_stavka", "tema", ili None za oba.
     Vraca: tabelu (skup, upit, track_id, ocena, tipfeler)."""
-    pass
+    qrels = pd.read_csv(QRELS_PATH, dtype={"track_id": "string", "upit": "string"})
+    columns = ["skup", "upit", "track_id", "ocena", "tipfeler"]
+    if not set(columns).issubset(qrels.columns) or qrels[columns].isna().any().any():
+        raise ValueError("Qrels mora imati popunjene kolone skup, upit, track_id, ocena i tipfeler.")
+    if (not qrels["skup"].isin(["poznata_stavka", "tema"]).all()
+            or not qrels["ocena"].isin([0, 1, 2]).all()
+            or not qrels["tipfeler"].isin([0, 1]).all()):
+        raise ValueError("Qrels sadrzi nepoznatu grupu, ocenu ili oznaku tipfelera.")
+    if skup is not None:
+        if skup not in ("poznata_stavka", "tema"):
+            raise ValueError("skup mora biti poznata_stavka ili tema.")
+        qrels = qrels.loc[qrels["skup"] == skup]
+    return qrels[columns].reset_index(drop=True)
 
 
-def napravi_evaluaciju() -> None:
-    """Racuna metrike za TF-IDF i BM25 nad qrels i snima tabelu u
-    artifacts/."""
-    pass
+def napravi_evaluaciju() -> dict:
+    """Pripremi rang-liste tri modela i BM25 graf; aplikacija ih samo cita."""
+    from mrvectorbeat.search.ranking.evaluation import build_evaluation
+
+    artifact = build_evaluation(ucitaj_indeks(), ucitaj_katalog(), ucitaj_qrels(),
+                                progress=lambda message: print(message, flush=True))
+    EVALUACIJA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = EVALUACIJA_PATH.with_suffix(".tmp.pkl")
+    with temporary.open("wb") as output:
+        pickle.dump(artifact, output, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary.replace(EVALUACIJA_PATH)
+    return artifact
 
 
-def ucitaj_evaluaciju() -> None:
-    """Cita gotovu tabelu metrika iz artifacts/."""
-    pass
+def ucitaj_evaluaciju() -> dict:
+    """Cita gotove rang-liste, ocene porodica i BM25 podatke, bez rangiranja."""
+    if not EVALUACIJA_PATH.exists():
+        raise FileNotFoundError("Evaluacija nije pripremljena. Pokreni: python -m scripts.pripremi --samo-evaluacija")
+    for source in (QRELS_PATH, KATALOG_PATH, INDEKS_PATH):
+        if source.exists() and source.stat().st_mtime_ns > EVALUACIJA_PATH.stat().st_mtime_ns:
+            raise ValueError("Evaluacija je zastarela. Pokreni: python -m scripts.pripremi --samo-evaluacija")
+    with EVALUACIJA_PATH.open("rb") as source:
+        artifact = pickle.load(source)
+    if artifact.get("version") != 1:
+        raise ValueError("Format evaluacije nije podrzan. Ponovo pokreni scripts.pripremi.")
+    return artifact
 
 
 def napravi_jezicki(mu: float = 1000.0) -> None:

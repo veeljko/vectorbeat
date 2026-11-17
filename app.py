@@ -261,25 +261,6 @@ def ucitaj_sbert_vektore():
     pass
 
 
-porodice = ucitaj_porodice()
-try:
-    df = ucitaj_katalog()
-except FileNotFoundError:
-    df = None
-try:
-    ind = ucitaj_indeks() if df is not None else None
-    index_error = ""
-except (FileNotFoundError, ValueError) as error:
-    ind = None
-    index_error = str(error)
-stablo = ucitaj_trie() if df is not None else None
-izvodjaci = ucitaj_izvodjace()
-# SBERT i Ollama se ucitavaju odmah pri pokretanju - trebaju i "Po smislu"
-# i "AI DJ Bot", pa cekanje ide na start, a ne na prvi upit.
-ucitaj_sbert()
-zagrej_ollama()
-
-
 # --- Bocna traka -------------------------------------------------------
 
 with st.sidebar:
@@ -287,7 +268,7 @@ with st.sidebar:
 
     strana = st.radio("Izaberite stranu", ["Obrada teksta", "Pretraga", "Stihovi", "Jezicki model", "Evaluacija",
                                            "Izvodjaci", "Katalog", "Radio", "Po smislu", "AI DJ Bot",
-                                           "Hibridna pretraga", "Klasteri", "Autoplay"])
+                                           "Hibridna pretraga", "Klasteri", "Autoplay"], key="strana")
 
     st.divider()
     st.caption("Ucitani indeksi")
@@ -295,6 +276,26 @@ with st.sidebar:
     #   prikaz.statistika("Pesama", len(df))
     #   prikaz.statistika("Izvodjaca", len(izvodjaci))
     #   prikaz.statistika("Reci u indeksu", broj_reci())
+
+
+if strana != "Evaluacija":
+    porodice = ucitaj_porodice()
+    try:
+        df = ucitaj_katalog()
+    except FileNotFoundError:
+        df = None
+    try:
+        ind = ucitaj_indeks() if df is not None else None
+        index_error = ""
+    except (FileNotFoundError, ValueError) as error:
+        ind = None
+        index_error = str(error)
+    stablo = ucitaj_trie() if df is not None else None
+    izvodjaci = ucitaj_izvodjace()
+    # SBERT i Ollama se ucitavaju odmah pri pokretanju - trebaju i "Po smislu"
+    # i "AI DJ Bot", pa cekanje ide na start, a ne na prvi upit.
+    ucitaj_sbert()
+    zagrej_ollama()
 
 
 # --- Pretraga ----------------------------------------------------------
@@ -376,6 +377,7 @@ elif strana == "Stihovi":
         distance = 3
         measure = "tfidf"
         k1, b = 1.5, 0.75
+        bm25_error = ""
         if mode == "boolean":
             operator = st.selectbox("Operator", ["AND", "OR", "DIFFERENCE"])
             st.caption({"AND": "Pesma mora sadrzati sve unete termine.",
@@ -388,10 +390,18 @@ elif strana == "Stihovi":
             measure_label = st.selectbox("Mera slicnosti", ["TF-IDF", "Kosinusna (lnc.ltc)", "BM25"])
             measure = {"TF-IDF": "tfidf", "Kosinusna (lnc.ltc)": "cosine", "BM25": "bm25"}[measure_label]
             if measure == "bm25":
+                try:
+                    selected = ucitaj_evaluaciju()["bm25_selected"]
+                except (FileNotFoundError, ValueError) as error:
+                    bm25_error = str(error)
+                    st.info(bm25_error)
+                else:
+                    k1, b = selected["k1"], selected["b"]
+                    st.caption(f"Parametri iz evaluacije: k1={k1:g}, b={b:g}.")
                 parameters = st.columns(2)
-                k1 = parameters[0].number_input("k1", min_value=0.0, value=1.5, step=0.1,
+                k1 = parameters[0].number_input("k1", min_value=0.0, value=float(k1), step=0.1,
                                                 help="Veca vrednost pojacava uticaj ponavljanja reci.")
-                b = parameters[1].number_input("b", min_value=0.0, max_value=1.0, value=0.75, step=0.05,
+                b = parameters[1].number_input("b", min_value=0.0, max_value=1.0, value=float(b), step=0.05,
                                                help="0 iskljucuje korekciju po duzini pesme, a 1 je primenjuje u potpunosti.")
             st.caption("Pesme su poredjane od najvece ocene. Prikazuje se najbolje ocenjena verzija svake pesme.")
         st.caption("Upit i stihovi se obradjuju isto: mala slova, tokenizacija, stop-reci, stemovanje. "
@@ -402,7 +412,7 @@ elif strana == "Stihovi":
             st.session_state.pop("stihovi_slicne_izvor", None)
             st.session_state.pop("stihovi_poredjenje", None)
             st.session_state["stihovi_kontekst"] = context
-        if query.strip():
+        if query.strip() and not bm25_error:
             try:
                 results = pretrazi_stihove(query, mode, operator, distance, measure, k1, b)
             except ValueError as error:
@@ -458,9 +468,13 @@ elif strana == "Jezicki model":
 
 elif strana == "Evaluacija":
     st.title("Evaluacija pretrage")
-
-    # Koristi: ucitaj_evaluaciju(), ucitaj_qrels(), ucitaj_tfidf(),
-    #          ucitaj_bm25(), ind, df, prikaz.kartica()
+    try:
+        evaluation = ucitaj_evaluaciju()
+    except (FileNotFoundError, ValueError) as error:
+        st.info(str(error))
+    else:
+        from mrvectorbeat.evaluacija_prikaz import prikazi_evaluaciju
+        prikazi_evaluaciju(evaluation)
 
 
 # --- Izvodjaci ---------------------------------------------------------

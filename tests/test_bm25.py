@@ -139,6 +139,8 @@ class BM25AppTests(unittest.TestCase):
         try:
             with patch.object(pipeline, "ucitaj_katalog", return_value=catalog), \
                     patch.object(pipeline, "ucitaj_indeks", return_value=index), \
+                    patch.object(pipeline, "ucitaj_evaluaciju", return_value={
+                        "bm25_selected": {"k1": 1.5, "b": 0.75}}), \
                     patch.object(pipeline, "ucitaj_trie", return_value=None), \
                     patch.object(index, "score_ranked", wraps=index.score_ranked) as ranked, \
                     patch.object(index, "score_similar", wraps=index.score_similar) as similar:

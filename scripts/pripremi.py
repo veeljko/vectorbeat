@@ -18,50 +18,66 @@
 
 from mrvectorbeat import pipeline
 
-# Katalog
-katalog = pipeline.napravi_katalog()
-print(f"Katalog: {len(katalog):,} pesama", flush=True)
+def main():
+    import argparse
 
-# Tokeni
-tokeni = pipeline.napravi_tokene()
-print(f"Tokeni: {sum(map(len, tokeni['tokens'])):,} pojavljivanja", flush=True)
+    parser = argparse.ArgumentParser(description="Priprema modela i evaluacije.")
+    parser.add_argument("--samo-evaluacija", action="store_true",
+                        help="Koristi gotov katalog i indeks; pripremi rang-liste i BM25 graf.")
+    args = parser.parse_args()
+    if args.samo_evaluacija:
+        pipeline.napravi_evaluaciju()
+        print("Evaluacija: gotovo", flush=True)
+        return
 
-# Trie
-pipeline.napravi_trie()
+    # Katalog
+    katalog = pipeline.napravi_katalog()
+    print(f"Katalog: {len(katalog):,} pesama", flush=True)
 
-# K-gramski indeks ostaje za kasnije.
+    # Tokeni
+    tokeni = pipeline.napravi_tokene()
+    print(f"Tokeni: {sum(map(len, tokeni['tokens'])):,} pojavljivanja", flush=True)
 
-# Invertovani indeks
-indeks = pipeline.napravi_indeks()
-print(f"Pozicioni indeks: {len(indeks.index):,} termina", flush=True)
+    # Trie
+    pipeline.napravi_trie()
 
-# TF-IDF model
-pipeline.napravi_tfidf()
+    # K-gramski indeks ostaje za kasnije.
 
-# BM25 i evaluacija
-pipeline.napravi_bm25()
-pipeline.napravi_evaluaciju()
+    # Invertovani indeks
+    indeks = pipeline.napravi_indeks()
+    print(f"Pozicioni indeks: {len(indeks.index):,} termina", flush=True)
 
-# Jezicki model
-pipeline.napravi_jezicki()
+    # TF-IDF model
+    pipeline.napravi_tfidf()
 
-# PageRank nad grafom izvodjaca
-# Vas crawler pravi graf izvodjaca - pokrenite ga pre ovog koraka.
-pipeline.napravi_rangove()
+    # BM25 i evaluacija
+    pipeline.napravi_bm25()
+    pipeline.napravi_evaluaciju()
 
-# k-d stablo
-pipeline.napravi_kdrvo()
+    # Jezicki model
+    pipeline.napravi_jezicki()
 
-# Semanticki model
-pipeline.napravi_semantiku()
+    # PageRank nad grafom izvodjaca
+    # Vas crawler pravi graf izvodjaca - pokrenite ga pre ovog koraka.
+    pipeline.napravi_rangove()
 
-# RAG korpus
-pipeline.napravi_rag_korpus()
+    # k-d stablo
+    pipeline.napravi_kdrvo()
 
-# Hibridna pretraga
-pipeline.napravi_hibrid_evaluaciju()
+    # Semanticki model
+    pipeline.napravi_semantiku()
 
-# Autoplay
-pipeline.napravi_autoplay()
+    # RAG korpus
+    pipeline.napravi_rag_korpus()
 
-print("Priprema: gotovo")
+    # Hibridna pretraga
+    pipeline.napravi_hibrid_evaluaciju()
+
+    # Autoplay
+    pipeline.napravi_autoplay()
+
+    print("Priprema: gotovo")
+
+
+if __name__ == "__main__":
+    main()

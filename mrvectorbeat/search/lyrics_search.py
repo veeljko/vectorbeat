@@ -99,7 +99,8 @@ def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
                   operator: str = "AND", distance: int = 3,
                   measure: str = "tfidf",
                   families: Mapping[int, str] | None = None, *,
-                  k1: float = 1.5, b: float = 0.75) -> LyricsResults:
+                  k1: float = 1.5, b: float = 0.75,
+                  include_hits: bool = True) -> LyricsResults:
     terms = TextProcessor(query).text_tokenize()
     results = LyricsResults(terms, {})
     if not terms:
@@ -107,7 +108,7 @@ def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
     if mode == "ranked":
         scores = (index.score_ranked(terms, measure, k1=k1, b=b) if measure == "bm25"
                   else index.score_ranked(terms, measure))
-        return _ranked_results(index, terms, scores, families)
+        return _ranked_results(index, terms, scores, families, include_hits=include_hits)
     if mode == "phrase":
         for doc_id, position in index.find_phrase(terms):
             results.hits.setdefault(doc_id, []).append((position, position + len(terms)))
