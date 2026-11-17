@@ -155,11 +155,11 @@ def napravi_isecke(lyrics, hits):
 
 
 @st.cache_data(max_entries=50)
-def pretrazi_stihove(query, mode, operator, distance, measure):
+def pretrazi_stihove(query, mode, operator, distance, measure, k1=1.5, b=0.75):
     """Sacuvaj rezultate upita i tokom izbora slicne pesme ili poredjenja."""
     from mrvectorbeat.search.lyrics_search import search_lyrics
     return search_lyrics(ucitaj_indeks(), query, mode, operator, distance, measure,
-                         ucitaj_porodice_po_id() if mode == "ranked" else None)
+                         ucitaj_porodice_po_id() if mode == "ranked" else None, k1=k1, b=b)
 
 
 @st.cache_data(max_entries=20)
@@ -375,6 +375,7 @@ elif strana == "Stihovi":
         operator = "AND"
         distance = 3
         measure = "tfidf"
+        k1, b = 1.5, 0.75
         if mode == "boolean":
             operator = st.selectbox("Operator", ["AND", "OR", "DIFFERENCE"])
             st.caption({"AND": "Pesma mora sadrzati sve unete termine.",
@@ -384,20 +385,26 @@ elif strana == "Stihovi":
             distance = st.number_input("Rastojanje manje od", min_value=1, value=3, step=1)
             st.caption("Unesite dva termina. Redosled nije bitan; susedni tokeni imaju rastojanje 1.")
         elif mode == "ranked":
-            measure_label = st.selectbox("Mera slicnosti", ["TF-IDF", "Kosinusna (lnc.ltc)"])
-            measure = "tfidf" if measure_label == "TF-IDF" else "cosine"
+            measure_label = st.selectbox("Mera slicnosti", ["TF-IDF", "Kosinusna (lnc.ltc)", "BM25"])
+            measure = {"TF-IDF": "tfidf", "Kosinusna (lnc.ltc)": "cosine", "BM25": "bm25"}[measure_label]
+            if measure == "bm25":
+                parameters = st.columns(2)
+                k1 = parameters[0].number_input("k1", min_value=0.0, value=1.5, step=0.1,
+                                                help="Veca vrednost pojacava uticaj ponavljanja reci.")
+                b = parameters[1].number_input("b", min_value=0.0, max_value=1.0, value=0.75, step=0.05,
+                                               help="0 iskljucuje korekciju po duzini pesme, a 1 je primenjuje u potpunosti.")
             st.caption("Pesme su poredjane od najvece ocene. Prikazuje se najbolje ocenjena verzija svake pesme.")
         st.caption("Upit i stihovi se obradjuju isto: mala slova, tokenizacija, stop-reci, stemovanje. "
                    "Fraza i rastojanje proveravaju se nad tako obradjenim tokenima.")
         query = st.text_input("Unesite deo stihova", key="stihovi_upit")
-        context = (query, mode, operator, distance, measure)
+        context = (query, mode, operator, distance, measure, k1, b)
         if st.session_state.get("stihovi_kontekst") != context:
             st.session_state.pop("stihovi_slicne_izvor", None)
             st.session_state.pop("stihovi_poredjenje", None)
             st.session_state["stihovi_kontekst"] = context
         if query.strip():
             try:
-                results = pretrazi_stihove(query, mode, operator, distance, measure)
+                results = pretrazi_stihove(query, mode, operator, distance, measure, k1, b)
             except ValueError as error:
                 st.info(str(error))
             else:
@@ -410,7 +417,7 @@ elif strana == "Stihovi":
                     page_size = st.selectbox("Rezultata po strani", [10, 20, 50])
                     total = len(results.hits)
                     pages = (total + page_size - 1) // page_size
-                    selection = (query, mode, operator, distance, measure, page_size)
+                    selection = (query, mode, operator, distance, measure, k1, b, page_size)
                     if st.session_state.get("stihovi_izbor") != selection:
                         st.session_state["stihovi_strana"] = 1
                         st.session_state["stihovi_izbor"] = selection

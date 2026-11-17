@@ -24,6 +24,9 @@ class PositionIndex(RankingLyricsSearch):
         if any(a == b for a, b in zip(self.document_ids, self.document_ids[1:])):
             raise ValueError("ID-evi dokumenata moraju biti jedinstveni.")
 
+        self.N = len(documents)
+        self.doc_len = {doc_id: len(tokens) for doc_id, tokens in documents}
+        self.average_document_length = sum(self.doc_len.values()) / self.N if self.N else 0.0
         
         indeks = defaultdict(dict)
         for doc_id, tokens in documents:
@@ -38,6 +41,10 @@ class PositionIndex(RankingLyricsSearch):
         n = len(self.document_ids)
         self.idf_values = {term: math.log10(n / len(posting))
                            for term, posting in self.directory.items()}
+        self.bm25_idf_values = {
+            term: math.log1p((n - len(posting) + 0.5) / (len(posting) + 0.5))
+            for term, posting in self.directory.items()
+        }
         self.document_weights: dict[int, dict[str, float]] = {
             doc_id: {} for doc_id in self.document_ids
         }
@@ -54,7 +61,7 @@ class PositionIndex(RankingLyricsSearch):
                                   for term, weight in weights.items()))
             for doc_id, weights in self.document_weights.items()
         }
-        self.ranking_version = 1
+        self.ranking_version = 2
  
     def get_documents(self, word: str) -> list[int]:
         #Vraca ID-jeve dokumenata gde se nalazi word

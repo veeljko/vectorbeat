@@ -113,11 +113,23 @@ Posle ponovne pripreme artefakata restartujte aplikaciju.
 - **Blizina**: posle obrade moraju ostati dva termina; trazi se
   `abs(pozicija_a - pozicija_b) < rastojanje`, u oba redosleda.
   Za rastojanje 2 prolaze susedni tokeni; za 1 nema pogodaka.
-- **Rangirano**: bira se TF-IDF ili kosinusna slicnost po shemi lnc.ltc.
+- **Rangirano**: bira se TF-IDF, kosinusna slicnost po shemi lnc.ltc ili BM25.
   Rezultati se sortiraju opadajuce po oceni, sa katalog ID-em kao pravilom
   za izjednacene ocene. Pre paginacije ostaje samo najbolje ocenjena
   verzija svake pesme prema koloni `porodica` iz prve nedelje.
   Uz pesmu se vide ocena, oznaceni iseci i dugme za slicne pesme po stihovima.
+
+Za **BM25** se podesavaju `k1` (podrazumevano 1.5) i `b` (0.75).
+`k1` kontrolise zasicenje uticaja broja pojavljivanja reci, a `b` korekciju
+po duzini pesme (`b=0` je iskljucuje). Koristi se sirova frekvencija reci i
+nenegativan IDF `ln(1 + (N - df + 0.5) / (df + 0.5))`. Duzina pesme je broj
+obradjenih tokena, a prosek ukljucuje i prazne pesme. Duzine, prosecna duzina
+i BM25 IDF racunaju se jednom pri gradnji i cuvaju u istom artefaktu indeksa.
+Ocenjuju se samo kandidati iz postings lista reci upita. Promena `k1` ili `b`
+osvezava rezultate i vraca paginaciju na pocetak; izbor slicne pesme koristi
+kesirane rezultate pocetne pretrage. Lista slicnih pesama i dalje koristi kosinus.
+Posle nadogradnje starog indeksa potrebno je jednom pokrenuti
+`python -m scripts.pripremi` i restartovati aplikaciju.
 
 Dugme **Slicne pesme** otvara zasebnu, paginiranu listu koja uvek koristi
 kosinusnu slicnost lnc.ltc, cak i kada je pocetni upit rangiran TF-IDF merom.

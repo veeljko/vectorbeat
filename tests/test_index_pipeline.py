@@ -28,17 +28,25 @@ class IndexPipelineTests(unittest.TestCase):
                 self.assertEqual(loaded.idf_values, built.idf_values)
                 self.assertEqual(loaded.document_norms, built.document_norms)
                 self.assertEqual(loaded.document_query_norms, built.document_query_norms)
+                self.assertEqual(loaded.doc_len, {2: 2, 5: 0, 8: 2})
+                self.assertEqual(loaded.N, 3)
+                self.assertEqual(loaded.avgdl(), 4 / 3)
+                self.assertEqual(loaded.bm25_idf_values, built.bm25_idf_values)
                 self.assertEqual(loaded.find_boolean(["love", "night"]), [2])
                 self.assertEqual(loaded.find_phrase(["night", "love"]), [(2, 0)])
                 expected_scores = built.score_similar(2)
                 expected_contributions = built.similarity_contributions(2, 8)
+                expected_bm25 = built.score_ranked(["love"], "bm25")
                 # Ucitavanje i slicnost citaju sacuvane statistike, bez nove gradnje.
                 with patch.object(pipeline, "PositionIndex", side_effect=AssertionError("Rebuild")), \
                         patch("math.log10", side_effect=AssertionError("Ponovni IDF/TF")), \
+                        patch("math.log1p", side_effect=AssertionError("Ponovni BM25 IDF")), \
                         patch("math.sqrt", side_effect=AssertionError("Ponovna norma")):
                     reloaded = pipeline.ucitaj_indeks()
                     self.assertEqual(reloaded.score_similar(2), expected_scores)
                     self.assertEqual(reloaded.similarity_contributions(2, 8), expected_contributions)
+                    self.assertEqual(pipeline.ucitaj_bm25().score_ranked(["love"], "bm25"), expected_bm25)
+                    self.assertEqual(pipeline.napravi_bm25().score_ranked(["love"], "bm25"), expected_bm25)
 
     def test_mismatched_catalog_and_tokens_rejected(self):
         catalog = pd.DataFrame({"katalog_id": [2], "track_id": ["a"]})

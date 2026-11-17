@@ -98,13 +98,16 @@ def compare_lyrics(index: PositionIndex, source_id: int, target_id: int,
 def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
                   operator: str = "AND", distance: int = 3,
                   measure: str = "tfidf",
-                  families: Mapping[int, str] | None = None) -> LyricsResults:
+                  families: Mapping[int, str] | None = None, *,
+                  k1: float = 1.5, b: float = 0.75) -> LyricsResults:
     terms = TextProcessor(query).text_tokenize()
     results = LyricsResults(terms, {})
     if not terms:
         return results
     if mode == "ranked":
-        return _ranked_results(index, terms, index.score_ranked(terms, measure), families)
+        scores = (index.score_ranked(terms, measure, k1=k1, b=b) if measure == "bm25"
+                  else index.score_ranked(terms, measure))
+        return _ranked_results(index, terms, scores, families)
     if mode == "phrase":
         for doc_id, position in index.find_phrase(terms):
             results.hits.setdefault(doc_id, []).append((position, position + len(terms)))

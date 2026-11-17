@@ -252,7 +252,7 @@ def ucitaj_indeks() -> PositionIndex:
             raise ValueError("Indeks je zastareo. Pokreni: python -m scripts.pripremi")
     with INDEKS_PATH.open("rb") as source:
         index = pickle.load(source)
-    if getattr(index, "ranking_version", None) != 1:
+    if getattr(index, "ranking_version", None) != 2:
         raise ValueError("Indeks nema pripremljene tezine za rangiranje. Pokreni: python -m scripts.pripremi")
     return index
 
@@ -267,14 +267,14 @@ def ucitaj_tfidf() -> PositionIndex:
     return ucitaj_indeks()
 
 
-def napravi_bm25() -> None:
-    """Gradi BM25 model i snima ga u artifacts/."""
-    pass
+def napravi_bm25() -> PositionIndex:
+    """BM25 IDF i duzine vec su sacuvani pri gradnji pozicionog indeksa."""
+    return ucitaj_indeks()
 
 
-def ucitaj_bm25() -> None:
-    """Cita gotov BM25 model iz artifacts/."""
-    pass
+def ucitaj_bm25() -> PositionIndex:
+    """Cita zajednicki artefakt sa pripremljenim BM25 statistikama."""
+    return ucitaj_indeks()
 
 
 def ucitaj_qrels(skup: str | None = None) -> None:
