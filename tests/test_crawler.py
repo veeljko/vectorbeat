@@ -1,18 +1,58 @@
 import contextlib
 import io
 import unittest
+from unittest.mock import Mock, patch
+
+import requests
 
 from mrvectorbeat.crawler.crawler import Crawler, NON_ARTICLE_PREFIXES, WIKI
 
 
 class CrawlerTests(unittest.TestCase):
+    def test_fetch_page_returns_html_for_success_with_default_headers_and_timeout(self):
+        url = WIKI + "Information_retrieval"
+        response = Mock(status_code=200, text="<html><p>Information retrieval</p></html>")
+        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=response) as get:
+            self.assertEqual(Crawler().fetch_page(url), (200, response.text))
+        get.assert_called_once()
+        self.assertEqual(get.call_args.args, (url,))
+        self.assertEqual(get.call_args.kwargs["timeout"], 10)
+        self.assertTrue(get.call_args.kwargs["headers"]["User-Agent"])
+
+    def test_fetch_page_does_not_read_body_for_non_200_status(self):
+        for status in (204, 301, 403, 404, 500):
+            with self.subTest(status=status):
+                response = Mock(spec=["status_code"])
+                response.status_code = status
+                with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=response):
+                    self.assertEqual(Crawler.fetch_page(WIKI + "Missing"), (status, None))
+
+    def test_fetch_page_handles_timeout_and_connection_errors(self):
+        for error in (requests.Timeout("Timeout"), requests.ConnectionError("Connection failed"),
+                      requests.RequestException("Request failed")):
+            with self.subTest(error=type(error).__name__):
+                output = io.StringIO()
+                with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=error), \
+                        contextlib.redirect_stdout(output):
+                    self.assertEqual(Crawler.fetch_page(WIKI + "Music"), (None, None))
+                self.assertIn("Request failed: " + type(error).__name__, output.getvalue())
+
+    def test_fetch_page_accepts_custom_headers_and_timeout_without_mutating_headers(self):
+        headers = {"User-Agent": "CustomCrawler/1.0", "Accept": "text/html"}
+        original_headers = headers.copy()
+        response = Mock(status_code=200, text="HTML")
+        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=response) as get:
+            self.assertEqual(Crawler.fetch_page(WIKI + "Music", headers=headers, timeout=3.5), (200, "HTML"))
+        get.assert_called_once_with(WIKI + "Music", headers=headers, timeout=3.5)
+        self.assertEqual(headers, original_headers)
+
     def test_instance_returns_all_absolute_links_without_fragments(self):
         html = '''<a href="../Artist#Career">Artist</a>
                   <a href="?page=2#Top">Next</a>
                   <a href="https://other.example/Music#History">Other</a>
                   <a>No href</a>'''
         url = "https://example.com/wiki/Page"
-        self.assertEqual(Crawler().get_links({url: html}, url), [
+        self.assertEqual(Crawler().get_links(html, url), [
             "https://example.com/Artist",
             "https://example.com/wiki/Page?page=2",
             "https://other.example/Music",
@@ -23,13 +63,13 @@ class CrawlerTests(unittest.TestCase):
         for html in ("", "<p>Text</p>", "<a>Name only</a>"):
             with self.subTest(html=html):
                 url = "https://example.com/"
-                self.assertEqual(crawler.get_links({url: html}, url), [])
+                self.assertEqual(crawler.get_links(html, url), [])
 
     def test_helpers_work_on_instance_and_class(self):
         html = '<a href="/Music#History">Music</a>'
         url = "https://example.com/"
         for target in (Crawler, Crawler()):
-            self.assertEqual(target._raw_links({url: html}, url),
+            self.assertEqual(target._raw_links(html, url),
                              ["https://example.com/Music#History"])
             self.assertEqual(target._normalize("https://example.com/?page=2#Part"),
                              "https://example.com/?page=2")
@@ -39,18 +79,18 @@ class CrawlerTests(unittest.TestCase):
                   <p>First</p><p>Second <b>word</b>.</p><div> More\n text &amp; music </div>'''
         expected = "First Second word . More text & music"
         url = "https://example.com/"
-        self.assertEqual(Crawler().get_text({url: html}, url), expected)
-        self.assertEqual(Crawler.get_text({url: html}, url), expected)
-        self.assertEqual(Crawler().get_text({url: ""}, url), "")
+        self.assertEqual(Crawler().get_text(html), expected)
+        self.assertEqual(Crawler.get_text(html), expected)
+        self.assertEqual(Crawler().get_text(""), "")
 
     def test_bytes_html(self):
         html = b'<p>Hello</p><a href="/music">Music</a>'
         url = "https://example.com/"
-        self.assertEqual(Crawler().get_text({url: html}, url), "Hello Music")
-        self.assertEqual(Crawler().get_links({url: html}, url),
+        self.assertEqual(Crawler().get_text(html), "Hello Music")
+        self.assertEqual(Crawler().get_links(html, url),
                          ["https://example.com/music"])
 
-    def test_dictionary_selects_the_requested_page_and_ignores_comments(self):
+    def test_page_html_is_parsed_and_comments_are_ignored(self):
         webs = {
             "http://mini.ir/index.html": '''<h1>Handbook</h1>
                 <!-- <a href="promo.html">Old ad</a> -->
@@ -59,19 +99,18 @@ class CrawlerTests(unittest.TestCase):
                 <a href="bm25.html#parameters">BM25</a>''',
         }
         crawler = Crawler()
-        self.assertEqual(crawler.get_links(webs, "http://mini.ir/index.html"),
+        self.assertEqual(crawler.get_links(webs["http://mini.ir/index.html"], "http://mini.ir/index.html"),
                          ["http://mini.ir/ranking.html"])
-        self.assertEqual(crawler.get_links(webs, "http://mini.ir/ranking.html#top"),
+        self.assertEqual(crawler.get_links(webs["http://mini.ir/ranking.html"], "http://mini.ir/ranking.html#top"),
                          ["http://mini.ir/bm25.html"])
-        self.assertEqual(crawler.get_text(webs, "http://mini.ir/ranking.html#top"), "Ranking BM25")
-        self.assertNotIn("Old ad", crawler.get_text(webs, "http://mini.ir/index.html"))
+        self.assertEqual(crawler.get_text(webs["http://mini.ir/ranking.html"]), "Ranking BM25")
+        self.assertNotIn("Old ad", crawler.get_text(webs["http://mini.ir/index.html"]))
 
-    def test_unknown_page_has_no_links_or_text(self):
-        webs = {"http://mini.ir/index.html": "<p>Home</p>"}
+    def test_empty_html_has_no_links_or_text(self):
         crawler = Crawler()
-        self.assertEqual(crawler.get_links(webs, "http://mini.ir/calendar?month=1"), [])
-        self.assertEqual(crawler.get_text(webs, "http://mini.ir/calendar?month=1"), "")
-        self.assertEqual(crawler.get_links({}, "http://mini.ir/index.html"), [])
+        self.assertEqual(crawler.get_links("", "http://mini.ir/calendar?month=1"), [])
+        self.assertEqual(crawler.get_text(""), "")
+        self.assertEqual(crawler.get_links("", "http://mini.ir/index.html"), [])
 
     def test_parse_robots_uses_wildcard_groups_and_ignores_empty_rules(self):
         text = """# Site rules
@@ -161,14 +200,14 @@ class CrawlerTests(unittest.TestCase):
         '''}
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            articles = Crawler().get_article_links(webs, current, verbose=True)
+            articles = Crawler().get_article_links(webs[current], current, verbose=True)
         self.assertEqual(articles, [WIKI + "ABBA", WIKI + "Ziggy_Stardust"])
         self.assertIn("Links in HTML : 8", output.getvalue())
         self.assertIn("Unique links  : 7", output.getvalue())
         self.assertIn("Article links : 2", output.getvalue())
         self.assertIn("ABBA", output.getvalue())
         with contextlib.redirect_stdout(io.StringIO()) as silent:
-            self.assertEqual(Crawler().get_article_links(webs, current), articles)
+            self.assertEqual(Crawler().get_article_links(webs[current], current), articles)
         self.assertEqual(silent.getvalue(), "")
 
     def test_article_preview_prints_only_eight_titles_without_truncating_results(self):
@@ -176,10 +215,10 @@ class CrawlerTests(unittest.TestCase):
         html = "".join(f'<a href="/wiki/Artist_{i:02}">{i}</a>' for i in range(10))
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            articles = Crawler().get_article_links({current: html}, current, verbose=True)
+            articles = Crawler().get_article_links(html, current, verbose=True)
         self.assertEqual(len(articles), 10)
         self.assertEqual(len([line for line in output.getvalue().splitlines() if line.startswith("   ")]), 8)
-        self.assertEqual(Crawler().get_article_links({}, current), [])
+        self.assertEqual(Crawler().get_article_links("", current), [])
 
 
 if __name__ == "__main__":

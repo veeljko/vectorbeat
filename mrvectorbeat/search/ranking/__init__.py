@@ -4,6 +4,7 @@ from importlib import import_module
 
 from .bm25 import BM25Ranking
 from .average_precision import average_precision
+from .harvest_rate import harvest_rate
 from .map_score import map_score
 from .mrr import mrr
 from .ndcg import dcg, ndcg_at_k
@@ -17,4 +18,5 @@ TFIDFRanking = import_module(".tf-idf", __name__).TFIDFRanking
 __all__ = [
     "TFIDFRanking", "BM25Ranking", "precision_at_k", "reciprocal_rank",
     "average_precision", "dcg", "ndcg_at_k", "map_score", "mrr", "one_step", "pagerank",
+    "harvest_rate",
 ]
