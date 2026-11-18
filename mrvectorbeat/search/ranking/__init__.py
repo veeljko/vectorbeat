@@ -7,6 +7,7 @@ from .average_precision import average_precision
 from .map_score import map_score
 from .mrr import mrr
 from .ndcg import dcg, ndcg_at_k
+from .pagerank import one_step, pagerank
 from .precision_at_k import precision_at_k
 from .reciprocal_rank import reciprocal_rank
 
@@ -15,5 +16,5 @@ TFIDFRanking = import_module(".tf-idf", __name__).TFIDFRanking
 
 __all__ = [
     "TFIDFRanking", "BM25Ranking", "precision_at_k", "reciprocal_rank",
-    "average_precision", "dcg", "ndcg_at_k", "map_score", "mrr",
+    "average_precision", "dcg", "ndcg_at_k", "map_score", "mrr", "one_step", "pagerank",
 ]
