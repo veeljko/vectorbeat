@@ -1,11 +1,13 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from heapq import heappop, heappush
 from itertools import count
+from threading import Lock
 import math
+import time
 
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 from mrvectorbeat.search.ranking.harvest_rate import harvest_rate
 
@@ -19,22 +21,44 @@ KEYWORDS = ["music", "singer", "songwriter", "album",
              "concert", "composer", "guitar", "orchestra"]
 
 class Crawler:
+    _request_lock = Lock()
+    _last_request_finished: float | None = None
+
     @staticmethod
-    def fetch_page(url: str, headers: Mapping[str, str] | None = None,
-                   timeout: float = 10) -> tuple[int | None, str | None]:
+    def fetch_page(url: str) -> tuple[int | None, str | None]:
         """Return (status, response text) for HTTP 200, or (status, None) otherwise.
 
-        Send a crawler User-Agent by default; custom headers can override it.
+        Leave at least one second between the end of one request and the next.
+        The first request starts immediately; no delay follows the last request.
+        The interval is shared by all instances and applies to redirects too.
         Request failures print the exception type and return (None, None).
         """
         request_headers = {"User-Agent": "UPI-Crawler/1.0 (contact: vmladenovic1524rn@raf.rs)"}
-        if headers is not None:
-            request_headers.update(headers)
+        redirects = 0
         try:
-            response = requests.get(url, headers=request_headers, timeout=timeout)
-            status = response.status_code
-            data = response.text if status == 200 else None
-            return status, data
+            while True:
+                with Crawler._request_lock:
+                    while Crawler._last_request_finished is not None:
+                        remaining = 1 - (time.monotonic() - Crawler._last_request_finished)
+                        if remaining <= 0:
+                            break
+                        time.sleep(remaining)
+                    try:
+                        # Follow redirects here so every HTTP hop observes the same interval.
+                        response = requests.get(url, headers=request_headers, allow_redirects=False)
+                    finally:
+                        Crawler._last_request_finished = time.monotonic()
+                status = response.status_code
+                if status in (301, 302, 303, 307, 308) and response.headers.get("Location"):
+                    next_url = urljoin(url, response.headers["Location"])
+                    response.close()
+                    if redirects >= 30:
+                        raise requests.TooManyRedirects("Exceeded 30 redirects.")
+                    redirects += 1
+                    url = next_url
+                    continue
+                data = response.text if status == 200 else None
+                return status, data
         except requests.RequestException as error:
             print("Request failed:", type(error).__name__)
             return None, None
@@ -155,14 +179,26 @@ class Crawler:
             score += text.count(rec)
         return score
 
-    def focused_crawl(self, seed: str, blocked_paths: Iterable[str],
-                      max_pages: int = 50, threshold: float = 2) -> dict[str, str]:
+    @staticmethod
+    def author_seed(author_name: str) -> str:
+        """Build a candidate English Wikipedia URL from an artist's catalog name."""
+        if not isinstance(author_name, str) or not author_name.strip():
+            raise ValueError("author_name must be a non-empty string.")
+        title = "_".join(author_name.split())
+        return WIKI + quote(title, safe="/()")
+
+    def focused_crawl(self,
+                      author_name: str,
+                      max_pages: int = 50,
+                      threshold: float = 2, *,
+                      seed: str | None = None) -> dict[str, dict[str, str]]:
         """Fetch pages by descending parent score, expanding only on-topic pages.
 
         calculate_score(html) evaluates each downloaded page.
         Successful off-topic pages are retained but their
         links are not followed. Robots rules are checked before each request.
-        Return a URL -> HTML dictionary containing at most max_pages pages.
+        Return author_name -> URL -> HTML, with at most max_pages pages.
+        Use the supplied seed or derive it from author_name.
         Print the successful download count and music-related harvest rate.
         """
         if isinstance(max_pages, bool) or not isinstance(max_pages, int) or max_pages < 0:
@@ -170,12 +206,19 @@ class Crawler:
         if not math.isfinite(threshold):
             raise ValueError("threshold must be finite.")
 
+        seed = self.author_seed(author_name) if seed is None else seed
         sequence = count()
         queue = [(-1000.0, next(sequence), self._normalize(seed))]
         visited = set()
         pages = {}
         relevant_urls = set()
-        blocked_paths = tuple(blocked_paths)
+
+        blocked_paths = []
+        if max_pages:
+            robots_status, robots_text = self.fetch_page("https://en.wikipedia.org/robots.txt")
+            if robots_status != 200 or robots_text is None:
+                raise RuntimeError(f"Could not fetch robots.txt (status={robots_status}).")
+            blocked_paths = self.parse_robots(robots_text)
 
         while queue and len(pages) < max_pages:
             _, _, url = heappop(queue)
@@ -203,7 +246,23 @@ class Crawler:
         rate = harvest_rate(pages, relevant_urls)
         print(f"Downloaded pages: {len(pages)}")
         print(f"Music-related share (harvest rate): {rate:.2%}")
-        return pages
+        return {author_name: pages}
+
+    def crawl_author(self, author_name: str,
+                     max_pages: int = 50, threshold: float = 2
+                     ) -> dict[Hashable, dict[str, list[str]]]:
+        """Return author_id -> page URL -> linked downloaded page URLs.
+
+        author_name corresponds to track_artist in katalog.parquet. 
+        Seed generation uses the name as a Wikipedia title, without resolving
+        ambiguous names. Every downloaded page is included, even below threshold.
+        """
+        seed = self.author_seed(author_name)
+        pages_by_author = self.focused_crawl(author_name, max_pages=max_pages,
+                                              threshold=threshold, seed=seed)
+        pages = pages_by_author[author_name]
+        links = {url: self.get_article_links(html, url) for url, html in pages.items()}
+        return {author_name: self.build_graph(links)}
 
     @staticmethod
     def build_graph(links: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:
@@ -225,7 +284,7 @@ if __name__ == "__main__":
     webs = crawler.fetch_page(current_url, headers=None, timeout=1000)[1]
     links = crawler.get_links(webs, current_url)
 
-    robots_text = crawler.fetch_page("https://en.wikipedia.org/robots.txt", headers=None, timeout=1000)[1]
+    robots_text = crawler.fetch_page("https://en.wikipedia.org/robots.txt")[1]
     article_links = crawler.get_article_links(webs, current_url, verbose=True)
     blocked_paths = crawler.parse_robots(robots_text)
     print(blocked_paths)
