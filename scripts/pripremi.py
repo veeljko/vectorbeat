@@ -18,16 +18,31 @@
 
 from mrvectorbeat import pipeline
 
+
+def _pripremi_graf_seed(*, retry_unresolved: bool = False):
+    seedovi = pipeline.napravi_seed(retry_unresolved=retry_unresolved)
+    print(f"Seedovi: {seedovi['seed'].notna().sum():,}/{len(seedovi):,} izvodjaca", flush=True)
+    graf, artist_nodes = pipeline.napravi_graf()
+    print(f"Graf: {len(graf):,} cvorova, {len(artist_nodes):,} izvodjaca", flush=True)
+
+
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Priprema modela i evaluacije.")
-    parser.add_argument("--samo-evaluacija", action="store_true",
-                        help="Koristi gotov katalog i indeks; pripremi rang-liste i BM25 graf.")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--samo-evaluacija", action="store_true",
+                       help="Koristi gotov katalog i indeks; pripremi rang-liste i BM25 graf.")
+    modes.add_argument("--samo-graf-seed", action="store_true",
+                       help="Koristi gotov katalog; pripremi seedove i graf, ponovi neresene seedove.")
     args = parser.parse_args()
     if args.samo_evaluacija:
         pipeline.napravi_evaluaciju()
         print("Evaluacija: gotovo", flush=True)
+        return
+    if args.samo_graf_seed:
+        _pripremi_graf_seed(retry_unresolved=True)
+        print("Seedovi i graf: gotovo", flush=True)
         return
 
     # Katalog
@@ -58,10 +73,7 @@ def main():
     pipeline.napravi_jezicki()
 
     # Seedovi i graf: postojeci artefakti se ucitavaju, nedostajuci se pripremaju.
-    seedovi = pipeline.napravi_seed()
-    print(f"Seedovi: {seedovi['seed'].notna().sum():,}/{len(seedovi):,} izvodjaca", flush=True)
-    graf, artist_nodes = pipeline.napravi_graf()
-    print(f"Graf: {len(graf):,} cvorova, {len(artist_nodes):,} izvodjaca", flush=True)
+    _pripremi_graf_seed()
 
     # PageRank nad grafom izvodjaca
     pipeline.napravi_rangove()

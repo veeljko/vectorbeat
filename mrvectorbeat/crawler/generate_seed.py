@@ -60,7 +60,7 @@ def _catalog_titles(values: Iterable[str]) -> set[str]:
 class WikipediaSeedResolver:
     """Find music entities by name and disambiguate them using catalog titles.
 
-    HTTP uses Crawler.fetch_page, including its User-Agent and shared one-second
+    HTTP uses Crawler.fetch_page, including its User-Agent and configured request
     interval. Network/API failures raise instead of being saved as missing artists.
     A genuine missing or ambiguous match returns None.
     """
@@ -96,30 +96,67 @@ class WikipediaSeedResolver:
                 time.sleep(60 if status == 429 else 5 * (attempt + 1))
         raise RuntimeError("Wikipedia is unavailable after three attempts; retry preparation later.")
 
-    def _search(self, query: str) -> list[dict]:
+    def _pages(self, titles: list[str]) -> list[dict]:
+        query = self._query(
+            titles="\x1f" + "\x1f".join(titles), redirects=1,
+            prop="info|pageprops|description|extracts",
+            inprop="url", exintro=1, explaintext=1, exlimit=10,
+        )
+        pages = query.get("pages", [])
+        by_title = {page["title"]: page for page in pages}
+        redirects = {entry["from"]: entry["to"]
+                     for kind in ("normalized", "converted", "redirects")
+                     for entry in query.get(kind, [])}
+        for requested in titles:
+            title = requested
+            chain = []
+            while title in redirects and title not in chain:
+                chain.append(title)
+                title = redirects[title]
+            page = by_title.get(title)
+            if page is not None:
+                # These names are verified by MediaWiki, not inferred from any
+                # mention in the article. Keep aliases attached to their target.
+                aliases = page.setdefault("title_aliases", [])
+                aliases.extend(alias for alias in chain if alias not in aliases)
+        return pages
+
+    @staticmethod
+    def _matches_artist_name(page: dict, artist: str) -> bool:
+        """Match a canonical title or an API-confirmed title/redirect alias."""
+        name = _normalize(artist)
+        titles = [page["title"], *page.get("title_aliases", [])]
+        return bool(name) and any(_normalize(title) == name for title in titles)
+
+    def _search(self, query: str, *, exact_title: str | None = None) -> list[dict]:
+        direct = self._pages([exact_title]) if exact_title else []
+        # A direct title lookup also finds articles missing from search results.
+        if any(self._candidate(page, exact_title)
+               and self._matches_artist_name(page, exact_title) for page in direct):
+            return direct
         results = self._query(list="search", srsearch=query, srnamespace=0,
                               srlimit=10).get("search", [])
         if not results:
-            return []
-        titles = "\x1f" + "\x1f".join(result["title"] for result in results)
-        return self._query(
-            titles=titles, redirects=1, prop="info|pageprops|description|extracts",
-            inprop="url", exintro=1, explaintext=1, exlimit=10,
-        ).get("pages", [])
+            return direct
+        return direct + self._pages([result["title"] for result in results])
 
     @staticmethod
     def _candidate(page: dict, artist: str) -> bool:
         if (page.get("ns") != 0 or "missing" in page or "invalid" in page
                 or "disambiguation" in page.get("pageprops", {})):
             return False
+        if re.match(r"lists? of\b", page["title"], re.I):
+            return False
         description = page.get("description") or page.get("pageprops", {}).get("wikibase-shortdesc", "")
         if _OTHER_TOPIC.search(description):
             return False
         # Only the subject's introduction establishes that this is an artist.
         # Music mentioned elsewhere on a city/album page is not enough.
-        introduction = page.get("extract", "").split("\n", 1)[0]
+        introduction = page.get("extract", "").strip().split("\n", 1)[0]
         if not _MUSIC_ENTITY.search(description + " " + introduction[:500]):
             return False
+        if WikipediaSeedResolver._matches_artist_name(page, artist):
+            return True
         name = _normalize(artist)
         title = _normalize(re.sub(r"\s*\([^)]*\)\s*$", "", page["title"]))
         if name == title:
@@ -135,9 +172,17 @@ class WikipediaSeedResolver:
         candidates = {page["pageid"]: page for page in pages if self._candidate(page, artist)}
         if not candidates:
             return None
-        if albums or songs:
-            # Even a single search match can be a different musician with the same
-            # name. Confirm catalog evidence instead of trusting search position.
+        # An exact title or verified redirect describing a musician is sufficient
+        # for a single candidate. This covers stage names and stylized spellings
+        # such as A$AP Mob -> ASAP Mob without guessing character substitutions.
+        # Wikipedia discographies need not contain every catalog song.
+        exact_match = (len(candidates) == 1 and
+                       self._matches_artist_name(next(iter(candidates.values())), artist))
+        if exact_match:
+            page = next(iter(candidates.values()))
+        elif albums or songs:
+            # Qualified titles, aliases, or multiple artists with the same name
+            # still need evidence from the catalog to select a clear match.
             scores = []
             for page_id in candidates:
                 if page_id not in self._full_text:
@@ -171,7 +216,7 @@ class WikipediaSeedResolver:
         # Strip title-forbidden brackets, but retain the original name in the artifact.
         query = re.sub(r"[\[\]{}|<>]", " ", artist_name).strip()
         album_titles, song_titles = _catalog_titles(albums), _catalog_titles(songs)
-        pages = self._search(query)
+        pages = self._search(query, exact_title=artist_name.strip())
         seed = self._choose(artist_name, pages, album_titles, song_titles)
         if seed is not None:
             return seed
@@ -193,25 +238,32 @@ class WikipediaSeedResolver:
         return None
 
 
-def generate_seed(catalog: pd.DataFrame, path: Path = DEFAULT_SEED_PATH) -> pd.DataFrame:
+def generate_seed(catalog: pd.DataFrame, path: Path = DEFAULT_SEED_PATH, *,
+                  existing: pd.DataFrame | None = None) -> pd.DataFrame:
     """Resolve every distinct catalog artist and atomically save artist_name, seed.
 
     Unresolved names remain in the artifact with a null seed. No guessed URL is
     substituted. Preparation aborts on HTTP/API failures without replacing a
-    previous artifact.
+    previous artifact. Pass existing to keep previously resolved URLs and retry
+    only unresolved/new artists.
     """
     resolver = WikipediaSeedResolver()
+    previous = {} if existing is None else dict(existing.itertuples(index=False, name=None))
     rows = []
     artists = catalog.dropna(subset=["track_artist"]).groupby("track_artist", sort=True)
     total = artists.ngroups
     for index, (artist, tracks) in enumerate(artists, 1):
-        seed = resolver.resolve_artist_page(
-            artist, albums=tracks.get("track_album_name", []), songs=tracks.get("track_name", []),
-        )
+        seed = previous.get(artist)
+        if not isinstance(seed, str) or not seed.strip():
+            seed = resolver.resolve_artist_page(
+                artist, albums=tracks.get("track_album_name", []), songs=tracks.get("track_name", []),
+            )
         rows.append({"artist_name": artist, "seed": seed})
         print(f"Seed {index}/{total}: {artist} -> {seed or 'unresolved'}", flush=True)
     table = pd.DataFrame(rows, columns=["artist_name", "seed"]).astype("string")
     path = Path(path)
+    if existing is not None and path.exists() and table.equals(existing.astype("string")):
+        return table
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp.parquet")
     table.to_parquet(temporary, index=False)

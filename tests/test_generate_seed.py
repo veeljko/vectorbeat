@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,64 @@ def article(page_id, title, description, text=""):
 
 
 class SeedResolverTests(unittest.TestCase):
+    def test_stylized_names_use_verified_redirects_without_discography_matches(self):
+        for original, canonical, description in (
+            ("A$AP Ferg", "ASAP Ferg", "American rapper"),
+            ("A$AP Mob", "ASAP Mob", "American hip hop collective"),
+            ("Ke$ha", "Kesha", "American singer"),
+            ("P!nk", "Pink", "American singer"),
+        ):
+            with self.subTest(artist=original):
+                page = article(1, canonical, description)
+                payload = {"query": {"redirects": [{"from": original, "to": canonical}],
+                                     "pages": [page]}}
+                with patch.object(Crawler, "fetch_page", return_value=(200, json.dumps(payload))) as fetch:
+                    seed = WikipediaSeedResolver().resolve_artist_page(
+                        original, songs=["Song not listed in the article"],
+                    )
+                self.assertEqual(seed, WIKI + canonical.replace(" ", "_"))
+                fetch.assert_called_once()
+
+    def test_normalization_and_redirect_chains_keep_aliases_with_their_own_target(self):
+        ferg = article(1, "ASAP Ferg", "American rapper")
+        mob = article(2, "ASAP Mob", "American hip hop collective")
+        payload = {
+            "normalized": [{"from": "A$AP_Ferg", "to": "A$AP Ferg"}],
+            "redirects": [{"from": "A$AP Ferg", "to": "ASAP Ferg"},
+                          {"from": "A$AP Mob", "to": "ASAP Mob"}],
+            "pages": [ferg, mob],
+        }
+        resolver = WikipediaSeedResolver()
+        with patch.object(resolver, "_query", return_value=payload):
+            pages = resolver._pages(["A$AP_Ferg", "A$AP Mob"])
+        self.assertTrue(resolver._candidate(pages[0], "A$AP Ferg"))
+        self.assertTrue(resolver._candidate(pages[1], "A$AP Mob"))
+        self.assertFalse(resolver._candidate(pages[0], "A$AP Mob"))
+        self.assertFalse(resolver._candidate(pages[1], "A$AP Ferg"))
+
+    def test_verified_redirect_still_requires_an_artist_article(self):
+        for page in (
+            article(1, "Boston", "City in Massachusetts"),
+            article(2, "List of musicians", "List of musicians"),
+        ):
+            page["title_aliases"] = ["Catalog Artist"]
+            self.assertFalse(WikipediaSeedResolver._candidate(page, "Catalog Artist"))
+
+    def test_exact_artist_article_does_not_require_complete_discography(self):
+        page = article(83151929, "Anja Kotar", "Slovenian singer-songwriter",
+                       "Anja Kotar is a Slovenian singer-songwriter based in California.")
+        with patch.object(Crawler, "fetch_page", return_value=(
+            200, json.dumps({"query": {"pages": [page]}}),
+        )) as fetch:
+            seed = WikipediaSeedResolver().resolve_artist_page(
+                "Anja Kotar", albums=["House Party"], songs=["House Party"],
+            )
+        self.assertEqual(seed, WIKI + "Anja_Kotar")
+        fetch.assert_called_once()
+        parameters = parse_qs(urlsplit(fetch.call_args.args[0]).query)
+        self.assertIn("Anja Kotar", parameters["titles"][0])
+        self.assertNotIn("list", parameters)
+
     def test_selects_band_instead_of_city_and_returns_canonical_url(self):
         pages = [article(1, "Boston", "City in Massachusetts", "Boston has music and bands."),
                  article(2, "Boston (band)", "American rock band")]
@@ -115,12 +174,13 @@ class SeedResolverTests(unittest.TestCase):
     def test_search_limits_namespace_and_resolves_redirects(self):
         resolver = WikipediaSeedResolver()
         with patch.object(Crawler, "fetch_page", side_effect=[
+            (200, json.dumps({"query": {"pages": [{"ns": 0, "title": "KARD", "missing": True}]}})),
             (200, json.dumps({"query": {"search": [{"title": "KARD"}]}})),
             (200, json.dumps({"query": {"pages": [article(7, "Kard (group)", "South Korean pop group")]}})),
         ]) as fetch:
             self.assertEqual(resolver.resolve_artist_page("KARD"), WIKI + "Kard_(group)")
-        search = parse_qs(urlsplit(fetch.call_args_list[0].args[0]).query)
-        details = parse_qs(urlsplit(fetch.call_args_list[1].args[0]).query)
+        search = parse_qs(urlsplit(fetch.call_args_list[1].args[0]).query)
+        details = parse_qs(urlsplit(fetch.call_args_list[2].args[0]).query)
         self.assertEqual(search["srnamespace"], ["0"])
         self.assertEqual(details["redirects"], ["1"])
 
@@ -178,6 +238,56 @@ class SeedPipelineTests(unittest.TestCase):
         self.assertTrue(pipeline.SEED_PATH.exists())
         with patch.object(WikipediaSeedResolver, "resolve_artist_page", side_effect=AssertionError("Search")):
             pd.testing.assert_frame_equal(pipeline.napravi_seed(), built)
+
+    def test_retry_unresolved_preserves_resolved_artists_and_two_column_format(self):
+        seeds = pd.DataFrame({"artist_name": ["Anja Kotar", "Boston"],
+                              "seed": [None, WIKI + "Boston_(band)"]}).astype("string")
+        seeds.to_parquet(pipeline.SEED_PATH, index=False)
+        catalog = pd.DataFrame({"track_artist": ["Anja Kotar", "Boston"],
+                                "track_name": ["House Party", "Peace of Mind"]})
+        with patch.object(pipeline, "ucitaj_katalog", return_value=catalog), \
+                patch.object(WikipediaSeedResolver, "resolve_artist_page",
+                             return_value=WIKI + "Anja_Kotar") as resolve, \
+                contextlib.redirect_stdout(io.StringIO()):
+            updated = pipeline.napravi_seed(retry_unresolved=True)
+        self.assertEqual(resolve.call_count, 1)
+        self.assertEqual(resolve.call_args.args, ("Anja Kotar",))
+        self.assertEqual(updated["seed"].tolist(), [WIKI + "Anja_Kotar", WIKI + "Boston_(band)"])
+        self.assertEqual(list(updated.columns), ["artist_name", "seed"])
+        pd.testing.assert_frame_equal(pipeline.ucitaj_seed(), updated)
+
+    def test_unchanged_unresolved_seeds_do_not_invalidate_graph_artifact(self):
+        self.seeds.to_parquet(pipeline.SEED_PATH, index=False)
+        before = pipeline.SEED_PATH.stat().st_mtime_ns
+        catalog = pd.DataFrame({"track_artist": ["Boston", "Missing"]})
+        with patch.object(pipeline, "ucitaj_katalog", return_value=catalog), \
+                patch.object(WikipediaSeedResolver, "resolve_artist_page", return_value=None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            pipeline.napravi_seed(retry_unresolved=True)
+        self.assertEqual(pipeline.SEED_PATH.stat().st_mtime_ns, before)
+
+    def test_updated_seeds_extend_existing_graph_instead_of_returning_stale_lookup(self):
+        old = WIKI + "Boston_(band)"
+        new = WIKI + "Anja_Kotar"
+        seeds = pd.DataFrame({"artist_name": ["Anja Kotar", "Boston"],
+                              "seed": [new, old]}).astype("string")
+        pipeline._snimi_pickle({old: []}, pipeline.GRAF_PATH)
+        pipeline._snimi_pickle({"Boston": old}, pipeline.ARTIST_NODES_PATH)
+        seeds.to_parquet(pipeline.SEED_PATH, index=False)
+        # A deterministic newer seed timestamp avoids filesystem clock granularity.
+        outdated = pipeline.SEED_PATH.stat().st_mtime_ns - 1_000_000_000
+        for path in (pipeline.GRAF_PATH, pipeline.ARTIST_NODES_PATH):
+            os.utime(path, ns=(outdated, outdated))
+
+        def crawl(artist, graph, **options):
+            graph.setdefault(options["seed"], [])
+            return graph
+
+        with patch.object(Crawler, "crawl_into_graph", side_effect=crawl), \
+                contextlib.redirect_stdout(io.StringIO()):
+            graph, nodes = pipeline.napravi_graf()
+        self.assertEqual(graph, {old: [], new: []})
+        self.assertEqual(nodes, {"Anja Kotar": new, "Boston": old})
 
     def test_graph_build_uses_resolved_seeds_skips_nulls_and_then_only_reads(self):
         self.seeds.to_parquet(pipeline.SEED_PATH, index=False)

@@ -340,13 +340,16 @@ def ucitaj_jezicki() -> None:
     pass
 
 
-def napravi_seed() -> pd.DataFrame:
-    """Ucitaj seed artefakt ako postoji; inace pronadji i sacuvaj seedove."""
+def napravi_seed(*, retry_unresolved: bool = False) -> pd.DataFrame:
+    """Ucitaj ili napravi seedove; opciono ponovi pretragu neresenih imena."""
+    existing = None
     if SEED_PATH.exists():
-        return ucitaj_seed()
+        existing = ucitaj_seed()
+        if not retry_unresolved or not (existing["seed"].isna() | existing["seed"].eq("")).any():
+            return existing
     from mrvectorbeat.crawler.generate_seed import generate_seed
 
-    return generate_seed(ucitaj_katalog(), SEED_PATH)
+    return generate_seed(ucitaj_katalog(), SEED_PATH, existing=existing)
 
 
 def ucitaj_seed() -> pd.DataFrame:
@@ -375,7 +378,11 @@ def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]
     Prva gradnja obilazi svakog izvodjaca sa pronadjenim seedom i spaja veze u
     zajednicki graf. Sledeci pozivi citaju sacuvani graf i mapu izvodjaca.
     """
-    if GRAF_PATH.exists() and ARTIST_NODES_PATH.exists():
+    seed_updated = SEED_PATH.stat().st_mtime_ns if SEED_PATH.exists() else 0
+    graph_outdated = GRAF_PATH.exists() and seed_updated > GRAF_PATH.stat().st_mtime_ns
+    nodes_outdated = ARTIST_NODES_PATH.exists() and seed_updated > ARTIST_NODES_PATH.stat().st_mtime_ns
+    if (GRAF_PATH.exists() and ARTIST_NODES_PATH.exists()
+            and not graph_outdated and not nodes_outdated):
         return ucitaj_graf()
 
     from mrvectorbeat.crawler.crawler import Crawler
@@ -384,12 +391,15 @@ def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]
     artist_seeds = {artist: seed if isinstance(seed, str) and seed else None
                     for artist, seed in seeds.itertuples(index=False, name=None)}
     artists = list(artist_seeds)
-    if GRAF_PATH.exists():
+    if GRAF_PATH.exists() and not graph_outdated:
         # A missing lookup can be rebuilt without downloading the graph again.
         with GRAF_PATH.open("rb") as source:
             graph = pickle.load(source)
     else:
         graph = {}
+        if GRAF_PATH.exists():
+            with GRAF_PATH.open("rb") as source:
+                graph = pickle.load(source)
         crawler = Crawler()
         for artist, seed in artist_seeds.items():
             if seed is None:

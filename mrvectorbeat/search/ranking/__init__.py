@@ -8,7 +8,7 @@ from .harvest_rate import harvest_rate
 from .map_score import map_score
 from .mrr import mrr
 from .ndcg import dcg, ndcg_at_k
-from .pagerank import one_step, pagerank
+from .page_ranking import one_step, pagerank
 from .precision_at_k import precision_at_k
 from .reciprocal_rank import reciprocal_rank
 

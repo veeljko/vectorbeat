@@ -35,6 +35,7 @@ class RequestSpacingTests(unittest.TestCase):
         self.starts = []
         self.finishes = []
         for target, value in (
+            ("mrvectorbeat.crawler.crawler.REQUEST_INTERVAL_SECONDS", 1.0),
             ("mrvectorbeat.crawler.crawler.time.monotonic", self.clock.monotonic),
             ("mrvectorbeat.crawler.crawler.time.sleep", self.clock.sleep),
             ("mrvectorbeat.crawler.crawler.Crawler._last_request_finished", None),
@@ -55,6 +56,23 @@ class RequestSpacingTests(unittest.TestCase):
         self.assertEqual(self.starts, [0])
         self.assertEqual(self.clock.pauses, [])
         self.assertEqual(self.clock.now, 0.2)
+
+    def test_zero_interval_disables_pauses_between_requests_and_redirects(self):
+        def request(url, **kwargs):
+            response = self.request(url, **kwargs)
+            if url.endswith("original"):
+                response.status_code = 302
+                response.headers = {"Location": "/destination"}
+            return response
+
+        with patch("mrvectorbeat.crawler.crawler.REQUEST_INTERVAL_SECONDS", 0.0), \
+                patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request):
+            Crawler.fetch_page("https://example.com/original")
+            Crawler.fetch_page("https://example.com/other")
+        self.assertEqual(len(self.starts), 3)
+        self.assertEqual(self.clock.pauses, [])
+        for index in range(1, len(self.starts)):
+            self.assertAlmostEqual(self.starts[index], self.finishes[index - 1])
 
     def test_waits_only_remaining_time_between_requests(self):
         with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=self.request):

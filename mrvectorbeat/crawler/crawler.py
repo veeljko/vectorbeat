@@ -20,6 +20,7 @@ from mrvectorbeat.search.ranking.harvest_rate import harvest_rate
 
 WIKI = "https://en.wikipedia.org/wiki/"
 PAGE_CACHE_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "crawler_pages"
+REQUEST_INTERVAL_SECONDS = 0.0  # Temporary: set to 1.0 to restore the one-second pause.
 NON_ARTICLE_PREFIXES = (
     "Special:", "Media:", "File:", "File_talk:", "Image:", "Image_talk:",
     "Category:", "Category_talk:", "Help:", "Help_talk:", "Talk:",
@@ -87,7 +88,8 @@ class Crawler:
         Set use_cache=False for dynamic API calls, whose HTTP 200 body may
         contain temporary API errors that must be retried.
 
-        Leave at least one second between the end of one request and the next.
+        REQUEST_INTERVAL_SECONDS controls the pause between actual requests;
+        it is temporarily zero (no enforced pause).
         The first request starts immediately; no delay follows the last request.
         The interval is shared by all instances and applies to redirects too.
         Request failures print the exception type and return (None, None).
@@ -107,8 +109,8 @@ class Crawler:
                             for alias in aliases:
                                 Crawler._save_cached_page(alias, cached)
                             return 200, cached
-                    while Crawler._last_request_finished is not None:
-                        remaining = 1 - (time.monotonic() - Crawler._last_request_finished)
+                    while REQUEST_INTERVAL_SECONDS > 0 and Crawler._last_request_finished is not None:
+                        remaining = REQUEST_INTERVAL_SECONDS - (time.monotonic() - Crawler._last_request_finished)
                         if remaining <= 0:
                             break
                         time.sleep(remaining)
