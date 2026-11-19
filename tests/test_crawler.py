@@ -1,6 +1,8 @@
 import contextlib
 import io
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
@@ -9,6 +11,13 @@ from mrvectorbeat.crawler.crawler import Crawler, NON_ARTICLE_PREFIXES, WIKI
 
 
 class CrawlerTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        cache = patch("mrvectorbeat.crawler.crawler.PAGE_CACHE_DIR", Path(directory.name))
+        cache.start()
+        self.addCleanup(cache.stop)
+
     def test_fetch_page_returns_html_for_success_with_default_headers_and_timeout(self):
         url = WIKI + "Information_retrieval"
         response = Mock(status_code=200, text="<html><p>Information retrieval</p></html>")

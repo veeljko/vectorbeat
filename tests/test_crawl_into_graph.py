@@ -8,6 +8,14 @@ from mrvectorbeat.crawler.crawler import Crawler, WIKI
 
 
 class CrawlIntoGraphTests(unittest.TestCase):
+    def setUp(self):
+        # Seed lookup now reads a prepared artifact; graph tests use a local fixture.
+        seeds = {name: Crawler.author_seed(name)
+                 for name in ("Source", "Peer", "Existing", "P!nk")}
+        patcher = patch.object(Crawler, "_artist_seeds", return_value=seeds)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_merges_new_nodes_and_edges_without_losing_existing_graph(self):
         seed, old, genre, album, peer, retained = [WIKI + title for title in
                                                  ("Source", "Existing", "Rock_music", "Album", "Peer", "Retained")]

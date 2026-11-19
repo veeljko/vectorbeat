@@ -57,8 +57,13 @@ def main():
     # Jezicki model
     pipeline.napravi_jezicki()
 
+    # Seedovi i graf: postojeci artefakti se ucitavaju, nedostajuci se pripremaju.
+    seedovi = pipeline.napravi_seed()
+    print(f"Seedovi: {seedovi['seed'].notna().sum():,}/{len(seedovi):,} izvodjaca", flush=True)
+    graf, artist_nodes = pipeline.napravi_graf()
+    print(f"Graf: {len(graf):,} cvorova, {len(artist_nodes):,} izvodjaca", flush=True)
+
     # PageRank nad grafom izvodjaca
-    # Vas crawler pravi graf izvodjaca - pokrenite ga pre ovog koraka.
     pipeline.napravi_rangove()
 
     # k-d stablo

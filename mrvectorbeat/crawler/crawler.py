@@ -1,7 +1,11 @@
 from collections.abc import Hashable, Iterable, Mapping
+from hashlib import sha256
 from heapq import heappop, heappush
 from itertools import count
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from threading import Lock
+import json
 import math
 import re
 import time
@@ -15,6 +19,7 @@ from mrvectorbeat.search.ranking.harvest_rate import harvest_rate
 
 
 WIKI = "https://en.wikipedia.org/wiki/"
+PAGE_CACHE_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "crawler_pages"
 NON_ARTICLE_PREFIXES = (
     "Special:", "Media:", "File:", "File_talk:", "Image:", "Image_talk:",
     "Category:", "Category_talk:", "Help:", "Help_talk:", "Talk:",
@@ -40,8 +45,47 @@ class Crawler:
     _last_request_finished: float | None = None
 
     @staticmethod
-    def fetch_page(url: str) -> tuple[int | None, str | None]:
-        """Return (status, response text) for HTTP 200, or (status, None) otherwise.
+    def _cache_path(url: str) -> Path:
+        """Use a normalized URL hash as a portable filename."""
+        key = sha256(Crawler._normalize(url).encode("utf-8")).hexdigest()
+        return PAGE_CACHE_DIR / (key + ".json")
+
+    @staticmethod
+    def _read_cached_page(url: str) -> str | None:
+        try:
+            cached = json.loads(Crawler._cache_path(url).read_text(encoding="utf-8"))
+        except (FileNotFoundError, UnicodeError, ValueError):
+            return None
+        if (isinstance(cached, dict) and cached.get("url") == Crawler._normalize(url)
+                and isinstance(cached.get("text"), str)):
+            return cached["text"]
+        return None
+
+    @staticmethod
+    def _save_cached_page(url: str, text: str) -> None:
+        """Replace one cache entry atomically, preserving complete UTF-8 content."""
+        path = Crawler._cache_path(url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                    suffix=".tmp", delete=False) as output:
+                temporary = Path(output.name)
+                json.dump({"url": Crawler._normalize(url), "text": text}, output,
+                          ensure_ascii=False)
+            temporary.replace(path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def fetch_page(url: str, *, use_cache: bool = True) -> tuple[int | None, str | None]:
+        """Return (status, text), reading successful responses from disk first.
+
+        HTTP 200 responses are saved in artifacts/crawler_pages, including
+        robots.txt and successful redirect aliases. Failures are not cached.
+        Set use_cache=False for dynamic API calls, whose HTTP 200 body may
+        contain temporary API errors that must be retried.
 
         Leave at least one second between the end of one request and the next.
         The first request starts immediately; no delay follows the last request.
@@ -49,10 +93,20 @@ class Crawler:
         Request failures print the exception type and return (None, None).
         """
         request_headers = {"User-Agent": "UPI-Crawler/1.0 (contact: vmladenovic1524rn@raf.rs)"}
+        url = Crawler._normalize(url)
         redirects = 0
+        aliases = []
         try:
-            while True:
-                with Crawler._request_lock:
+            # Keep the cache check and write under the same lock as HTTP, so two
+            # instances requesting the same page do not both download it.
+            with Crawler._request_lock:
+                while True:
+                    if use_cache:
+                        cached = Crawler._read_cached_page(url)
+                        if cached is not None:
+                            for alias in aliases:
+                                Crawler._save_cached_page(alias, cached)
+                            return 200, cached
                     while Crawler._last_request_finished is not None:
                         remaining = 1 - (time.monotonic() - Crawler._last_request_finished)
                         if remaining <= 0:
@@ -60,20 +114,26 @@ class Crawler:
                         time.sleep(remaining)
                     try:
                         # Follow redirects here so every HTTP hop observes the same interval.
-                        response = requests.get(url, headers=request_headers, allow_redirects=False)
+                        response = requests.get(url, headers=request_headers, timeout=10,
+                                                allow_redirects=False)
                     finally:
                         Crawler._last_request_finished = time.monotonic()
-                status = response.status_code
-                if status in (301, 302, 303, 307, 308) and response.headers.get("Location"):
-                    next_url = urljoin(url, response.headers["Location"])
-                    response.close()
-                    if redirects >= 30:
-                        raise requests.TooManyRedirects("Exceeded 30 redirects.")
-                    redirects += 1
-                    url = next_url
-                    continue
-                data = response.text if status == 200 else None
-                return status, data
+                    status = response.status_code
+                    if status in (301, 302, 303, 307, 308) and response.headers.get("Location"):
+                        next_url = urljoin(url, response.headers["Location"])
+                        response.close()
+                        if redirects >= 30:
+                            raise requests.TooManyRedirects("Exceeded 30 redirects.")
+                        redirects += 1
+                        aliases.append(url)
+                        url = Crawler._normalize(next_url)
+                        continue
+                    data = response.text if status == 200 else None
+                    if use_cache and status == 200:
+                        Crawler._save_cached_page(url, data)
+                        for alias in aliases:
+                            Crawler._save_cached_page(alias, data)
+                    return status, data
         except requests.RequestException as error:
             print("Request failed:", type(error).__name__)
             return None, None
@@ -212,6 +272,15 @@ class Crawler:
         title = "_".join(author_name.split())
         return WIKI + quote(title, safe="/()")
 
+    @staticmethod
+    def _artist_seeds() -> dict[str, str | None]:
+        """Read prepared seeds only; crawling never starts a new artist search."""
+        from mrvectorbeat.pipeline import ucitaj_seed
+
+        table = ucitaj_seed()
+        return {artist: seed if isinstance(seed, str) and seed else None
+                for artist, seed in table.itertuples(index=False, name=None)}
+
     def focused_crawl(self,
                       author_name: str,
                       max_pages: int = 50,
@@ -223,7 +292,8 @@ class Crawler:
         Successful off-topic pages are retained but their
         links are not followed. Robots rules are checked before each request.
         Return author_name -> URL -> HTML, with at most max_pages pages.
-        Use the supplied seed or derive it from author_name.
+        Use the supplied seed or read the artist's resolved seed artifact.
+        Skip unresolved artists instead of guessing an article URL.
         Print the successful download count and music-related harvest rate.
         """
         if isinstance(max_pages, bool) or not isinstance(max_pages, int) or max_pages < 0:
@@ -231,7 +301,15 @@ class Crawler:
         if not math.isfinite(threshold):
             raise ValueError("threshold must be finite.")
 
-        seed = self.author_seed(author_name) if seed is None else seed
+        if seed is None and max_pages:
+            seed = self._artist_seeds().get(author_name)
+        if seed is None or max_pages == 0:
+            print(f"No pages to crawl for {author_name}: unresolved seed or zero page limit.")
+            print("Downloaded pages: 0")
+            print("Music-related share (harvest rate): 0.00%")
+            return {author_name: {}}
+        if not self.is_article(seed):
+            raise ValueError("seed must be an English Wikipedia article URL.")
         sequence = count()
         queue = [(-1000.0, next(sequence), self._normalize(seed))]
         visited = set()
@@ -274,15 +352,18 @@ class Crawler:
         return {author_name: pages}
 
     def crawl_into_graph(self, author_name: str, graph: dict[str, list[str]],
-                         max_pages: int = 50, threshold: float = 2) -> dict[str, list[str]]:
+                         max_pages: int = 50, threshold: float = 2, *,
+                         seed: str | None = None) -> dict[str, list[str]]:
         """Crawl one artist and merge discovered article links into graph in place.
 
         graph is a shared URL -> list[URL] adjacency dictionary. Existing nodes
         and edges are retained. New destinations get an empty adjacency list
         until their own links are collected. Return the same graph object.
         """
-        pages = self.focused_crawl(author_name, max_pages=max_pages,
-                                   threshold=threshold)[author_name]
+        options = {"max_pages": max_pages, "threshold": threshold}
+        if seed is not None:
+            options["seed"] = seed
+        pages = self.focused_crawl(author_name, **options)[author_name]
         for url, html in pages.items():
             source = self._normalize(url)
             neighbors = graph.setdefault(source, [])
@@ -299,15 +380,24 @@ class Crawler:
 
     @staticmethod
     def build_artist_nodes(artist_names: Iterable[str],
-                           graph: Mapping[str, Iterable[str]]) -> dict[str, str]:
-        """Map catalog artist names to their existing seed URL nodes in graph.
+                           graph: Mapping[str, Iterable[str]], *,
+                           artist_seeds: Mapping[str, str | None] | None = None) -> dict[str, str]:
+        """Map catalog names to graph nodes using resolved, prepared seed URLs.
 
         Omit names whose seed is absent. This only builds a lookup dictionary;
         it performs no crawling and does not modify graph.
         """
+        artist_names = list(artist_names)
+        if not artist_names or not graph:
+            return {}
+        if artist_seeds is None:
+            artist_seeds = Crawler._artist_seeds()
         artist_nodes = {}
         for artist in artist_names:
-            seed = Crawler._normalize(Crawler.author_seed(artist))
+            seed = artist_seeds.get(artist)
+            if not isinstance(seed, str) or not seed:
+                continue
+            seed = Crawler._normalize(seed)
             if seed in graph:
                 artist_nodes[artist] = seed
         return artist_nodes
@@ -329,7 +419,7 @@ if __name__ == "__main__":
     # Example usage outside the class. HTML and robots rules are local fixtures.
     crawler = Crawler()
     current_url = WIKI + "David_Bowie"
-    webs = crawler.fetch_page(current_url, headers=None, timeout=1000)[1]
+    webs = crawler.fetch_page(current_url)[1]
     links = crawler.get_links(webs, current_url)
 
     robots_text = crawler.fetch_page("https://en.wikipedia.org/robots.txt")[1]

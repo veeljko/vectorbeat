@@ -1,6 +1,8 @@
 import contextlib
 import io
+import tempfile
 import unittest
+from pathlib import Path
 from threading import Event, Thread
 from unittest.mock import Mock, patch
 
@@ -24,6 +26,11 @@ class FakeClock:
 
 class RequestSpacingTests(unittest.TestCase):
     def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        cache = patch("mrvectorbeat.crawler.crawler.PAGE_CACHE_DIR", Path(directory.name))
+        cache.start()
+        self.addCleanup(cache.stop)
         self.clock = FakeClock()
         self.starts = []
         self.finishes = []

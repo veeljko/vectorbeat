@@ -33,6 +33,9 @@ TOKENI_PATH: Path = ARTIFACTS / "tokeni.parquet"
 INDEKS_PATH: Path = ARTIFACTS / "pozicioni_indeks.pkl"
 QRELS_PATH: Path = ROOT / "data" / "qrels.csv"
 EVALUACIJA_PATH: Path = ARTIFACTS / "evaluacija.pkl"
+SEED_PATH: Path = ARTIFACTS / "seed.parquet"
+GRAF_PATH: Path = ARTIFACTS / "graf.pkl"
+ARTIST_NODES_PATH: Path = ARTIFACTS / "artist_nodes.pkl"
 
 
 # Kolone koje zadrzavamo u katalogu. Sve ostalo iz CSV-a nam ne treba.
@@ -337,21 +340,80 @@ def ucitaj_jezicki() -> None:
     pass
 
 
-def ucitaj_graf() -> None:
-    """Cita graf izvodjaca koji je napravio vas crawler."""
-    """
-    Ako artifakt ne postoji, onda treba da kreira artifakt.
-    Ako postoji onda ga ucita i vrati.
+def napravi_seed() -> pd.DataFrame:
+    """Ucitaj seed artefakt ako postoji; inace pronadji i sacuvaj seedove."""
+    if SEED_PATH.exists():
+        return ucitaj_seed()
+    from mrvectorbeat.crawler.generate_seed import generate_seed
 
-    Kreiranje artifakta:
-    Uzmi listu imena artista
-    Napravi prazana graf
-    Prosledi svakog artista u crawl_into_graph
-    Zatim prosledi graf i listu artista u build_artist_nodes
-    Sacuvaj ta 2 podatka kao artifakte
-    Vrati ih kao return vrednost
+    return generate_seed(ucitaj_katalog(), SEED_PATH)
+
+
+def ucitaj_seed() -> pd.DataFrame:
+    """Cita samo pripremljene kolone artist_name i seed, bez HTTP zahteva."""
+    if not SEED_PATH.exists():
+        raise FileNotFoundError("Seedovi nisu pripremljeni. Pokreni: python -m scripts.pripremi")
+    table = pd.read_parquet(SEED_PATH)
+    if (list(table.columns) != ["artist_name", "seed"]
+            or table["artist_name"].isna().any()
+            or table["artist_name"].duplicated().any()):
+        raise ValueError("Seed artefakt mora imati jedinstven artist_name i kolonu seed.")
+    return table
+
+
+def _snimi_pickle(value: object, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp.pkl")
+    with temporary.open("wb") as output:
+        pickle.dump(value, output, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary.replace(path)
+
+
+def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]:
+    """Vrati (graf, artist_nodes); nedostajuce artefakte izgradi i sacuvaj.
+
+    Prva gradnja obilazi svakog izvodjaca sa pronadjenim seedom i spaja veze u
+    zajednicki graf. Sledeci pozivi citaju sacuvani graf i mapu izvodjaca.
     """
-    pass
+    if GRAF_PATH.exists() and ARTIST_NODES_PATH.exists():
+        return ucitaj_graf()
+
+    from mrvectorbeat.crawler.crawler import Crawler
+
+    seeds = napravi_seed()
+    artist_seeds = {artist: seed if isinstance(seed, str) and seed else None
+                    for artist, seed in seeds.itertuples(index=False, name=None)}
+    artists = list(artist_seeds)
+    if GRAF_PATH.exists():
+        # A missing lookup can be rebuilt without downloading the graph again.
+        with GRAF_PATH.open("rb") as source:
+            graph = pickle.load(source)
+    else:
+        graph = {}
+        crawler = Crawler()
+        for artist, seed in artist_seeds.items():
+            if seed is None:
+                print(f"Preskacem izvodjaca bez potvrdjenog seeda: {artist}", flush=True)
+                continue
+            crawler.crawl_into_graph(artist, graph, max_pages=max_pages,
+                                     threshold=threshold, seed=seed)
+        _snimi_pickle(graph, GRAF_PATH)
+    artist_nodes = Crawler.build_artist_nodes(artists, graph, artist_seeds=artist_seeds)
+    _snimi_pickle(artist_nodes, ARTIST_NODES_PATH)
+    return graph, artist_nodes
+
+
+def ucitaj_graf() -> tuple[dict, dict]:
+    """Ucitaj pripremljeni graf i mapu izvodjaca, bez gradnje ili HTTP zahteva."""
+    if not GRAF_PATH.exists():
+        raise FileNotFoundError("Graf nije pripremljen. Pokreni: python -m scripts.pripremi")
+    if not ARTIST_NODES_PATH.exists():
+        raise FileNotFoundError("Mapa izvodjaca nije pripremljena. Pokreni: python -m scripts.pripremi")
+    with GRAF_PATH.open("rb") as source:
+        graph = pickle.load(source)
+    with ARTIST_NODES_PATH.open("rb") as source:
+        artist_nodes = pickle.load(source)
+    return graph, artist_nodes
 
 
 def napravi_rangove() -> None:
