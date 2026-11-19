@@ -3,7 +3,9 @@ from heapq import heappop, heappush
 from itertools import count
 from threading import Lock
 import math
+import re
 import time
+import unicodedata
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,11 +16,24 @@ from mrvectorbeat.search.ranking.harvest_rate import harvest_rate
 
 WIKI = "https://en.wikipedia.org/wiki/"
 NON_ARTICLE_PREFIXES = (
-    "Special:", "File:", "Category:", "Help:", "Talk:", "Template:", "Template_talk:",
-    "Wikipedia:", "Portal:", "User:", "User_talk:", "Draft:", "Module:", "Main_Page",
+    "Special:", "Media:", "File:", "File_talk:", "Image:", "Image_talk:",
+    "Category:", "Category_talk:", "Help:", "Help_talk:", "Talk:",
+    "Template:", "Template_talk:", "Wikipedia:", "Wikipedia_talk:",
+    "Project:", "Project_talk:", "WP:", "WT:", "MediaWiki:", "MediaWiki_talk:",
+    "Portal:", "Portal_talk:", "User:", "User_talk:", "Draft:", "Draft_talk:",
+    "Module:", "Module_talk:", "Book:", "Book_talk:", "Main_Page",
 )
-KEYWORDS = ["music", "singer", "songwriter", "album",
-             "concert", "composer", "guitar", "orchestra"]
+KEYWORDS = [
+    "music", "musical", "musician", "singer", "songwriter", "album", "concert",
+    "composer", "guitar", "orchestra", "band", "vocalist", "rapper", "drummer",
+    "bassist", "guitarist", "pianist", "keyboardist", "violinist", "saxophonist",
+    "trumpeter", "conductor", "instrumentalist", "discography", "song",
+    "soundtrack", "symphony", "opera", "choir", "melody", "rhythm", "percussion",
+    "record label", "record producer", "recording studio", "music video",
+    "music festival", "recording artist", "jazz", "blues", "reggae", "hip hop",
+    "hip-hop", "heavy metal", "punk rock", "rock music", "pop music",
+    "electronic music", "classical music", "country music", "rhythm and blues",
+]
 
 class Crawler:
     _request_lock = Lock()
@@ -74,7 +89,15 @@ class Crawler:
 
     @staticmethod
     def _normalize(web: str) -> str:
-        return web.split("#")[0]        # fragment ne menja stranicu
+        """Unify encoded Wikipedia titles and discard article queries and fragments."""
+        parsed = urlsplit(web)
+        if (parsed.scheme == "https" and parsed.netloc.lower() == "en.wikipedia.org"
+                and parsed.path.startswith("/wiki/")):
+            title = unicodedata.normalize("NFC", unquote(parsed.path[len("/wiki/"):]))
+            title = title.replace(" ", "_")
+            return WIKI + quote(title, safe="/():")
+        # Query parameters may identify different resources on other websites.
+        return web.split("#", 1)[0]
 
 
     def get_links(self, html: str, web: str) -> list[str]:
@@ -150,7 +173,7 @@ class Crawler:
         if not title:
             return False
         for prefix in NON_ARTICLE_PREFIXES:
-            if title.startswith(prefix):
+            if title.casefold().startswith(prefix.casefold()):
                 return False
         return True
 
@@ -173,10 +196,12 @@ class Crawler:
         return articles
 
     def calculate_score(self, html):
+        """Count whole music terms and simple plurals, avoiding substring matches."""
         text = self.get_text(html).lower()
         score = 0
-        for rec in KEYWORDS:
-            score += text.count(rec)
+        for keyword in KEYWORDS:
+            pattern = r"(?<!\w)" + re.escape(keyword) + r"(?:s|es)?(?!\w)"
+            score += len(re.findall(pattern, text))
         return score
 
     @staticmethod
@@ -248,21 +273,44 @@ class Crawler:
         print(f"Music-related share (harvest rate): {rate:.2%}")
         return {author_name: pages}
 
-    def crawl_author(self, author_name: str,
-                     max_pages: int = 50, threshold: float = 2
-                     ) -> dict[Hashable, dict[str, list[str]]]:
-        """Return author_id -> page URL -> linked downloaded page URLs.
+    def crawl_into_graph(self, author_name: str, graph: dict[str, list[str]],
+                         max_pages: int = 50, threshold: float = 2) -> dict[str, list[str]]:
+        """Crawl one artist and merge discovered article links into graph in place.
 
-        author_name corresponds to track_artist in katalog.parquet. 
-        Seed generation uses the name as a Wikipedia title, without resolving
-        ambiguous names. Every downloaded page is included, even below threshold.
+        graph is a shared URL -> list[URL] adjacency dictionary. Existing nodes
+        and edges are retained. New destinations get an empty adjacency list
+        until their own links are collected. Return the same graph object.
         """
-        seed = self.author_seed(author_name)
-        pages_by_author = self.focused_crawl(author_name, max_pages=max_pages,
-                                              threshold=threshold, seed=seed)
-        pages = pages_by_author[author_name]
-        links = {url: self.get_article_links(html, url) for url, html in pages.items()}
-        return {author_name: self.build_graph(links)}
+        pages = self.focused_crawl(author_name, max_pages=max_pages,
+                                   threshold=threshold)[author_name]
+        for url, html in pages.items():
+            source = self._normalize(url)
+            neighbors = graph.setdefault(source, [])
+            known = set(neighbors)
+            for link in self.get_article_links(html, source):
+                target = self._normalize(link)
+                if target == source:
+                    continue
+                graph.setdefault(target, [])
+                if target not in known:
+                    neighbors.append(target)
+                    known.add(target)
+        return graph
+
+    @staticmethod
+    def build_artist_nodes(artist_names: Iterable[str],
+                           graph: Mapping[str, Iterable[str]]) -> dict[str, str]:
+        """Map catalog artist names to their existing seed URL nodes in graph.
+
+        Omit names whose seed is absent. This only builds a lookup dictionary;
+        it performs no crawling and does not modify graph.
+        """
+        artist_nodes = {}
+        for artist in artist_names:
+            seed = Crawler._normalize(Crawler.author_seed(artist))
+            if seed in graph:
+                artist_nodes[artist] = seed
+        return artist_nodes
 
     @staticmethod
     def build_graph(links: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:

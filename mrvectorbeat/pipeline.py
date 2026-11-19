@@ -339,6 +339,18 @@ def ucitaj_jezicki() -> None:
 
 def ucitaj_graf() -> None:
     """Cita graf izvodjaca koji je napravio vas crawler."""
+    """
+    Ako artifakt ne postoji, onda treba da kreira artifakt.
+    Ako postoji onda ga ucita i vrati.
+
+    Kreiranje artifakta:
+    Uzmi listu imena artista
+    Napravi prazana graf
+    Prosledi svakog artista u crawl_into_graph
+    Zatim prosledi graf i listu artista u build_artist_nodes
+    Sacuvaj ta 2 podatka kao artifakte
+    Vrati ih kao return vrednost
+    """
     pass
 
 
