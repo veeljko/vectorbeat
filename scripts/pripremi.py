@@ -35,6 +35,8 @@ def main():
                        help="Koristi gotov katalog i indeks; pripremi rang-liste i BM25 graf.")
     modes.add_argument("--samo-graf-seed", action="store_true",
                        help="Koristi gotov katalog; pripremi seedove i graf, ponovi neresene seedove.")
+    modes.add_argument("--samo-rangovi", action="store_true",
+                       help="Koristi gotov katalog i graf; pripremi PageRank uticaj izvodjaca.")
     args = parser.parse_args()
     if args.samo_evaluacija:
         pipeline.napravi_evaluaciju()
@@ -43,6 +45,10 @@ def main():
     if args.samo_graf_seed:
         _pripremi_graf_seed(retry_unresolved=True)
         print("Seedovi i graf: gotovo", flush=True)
+        return
+    if args.samo_rangovi:
+        rangovi = pipeline.napravi_rangove()
+        print(f"PageRank: {len(rangovi['artists']):,} izvodjaca, d={rangovi['d']:g}", flush=True)
         return
 
     # Katalog
@@ -76,7 +82,8 @@ def main():
     _pripremi_graf_seed()
 
     # PageRank nad grafom izvodjaca
-    pipeline.napravi_rangove()
+    rangovi = pipeline.napravi_rangove()
+    print(f"PageRank: {len(rangovi['artists']):,} izvodjaca, d={rangovi['d']:g}", flush=True)
 
     # k-d stablo
     pipeline.napravi_kdrvo()

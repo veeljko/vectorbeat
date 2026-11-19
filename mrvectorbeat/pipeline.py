@@ -36,6 +36,7 @@ EVALUACIJA_PATH: Path = ARTIFACTS / "evaluacija.pkl"
 SEED_PATH: Path = ARTIFACTS / "seed.parquet"
 GRAF_PATH: Path = ARTIFACTS / "graf.pkl"
 ARTIST_NODES_PATH: Path = ARTIFACTS / "artist_nodes.pkl"
+RANGOVI_PATH: Path = ARTIFACTS / "rangovi.pkl"
 
 
 # Kolone koje zadrzavamo u katalogu. Sve ostalo iz CSV-a nam ne treba.
@@ -426,15 +427,45 @@ def ucitaj_graf() -> tuple[dict, dict]:
     return graph, artist_nodes
 
 
-def napravi_rangove() -> None:
-    """Racuna PageRank nad grafom izvodjaca i snima rang-listu u
-    artifacts/."""
-    pass
+def napravi_rangove(d: float = 0.85) -> dict:
+    """Pripremi uticaj nad celim grafom i rang-listu izvodjaca iz kataloga."""
+    if RANGOVI_PATH.exists():
+        try:
+            artifact = ucitaj_rangove()
+        except ValueError:
+            pass
+        else:
+            if artifact["d"] == d:
+                return artifact
+    from mrvectorbeat.search.ranking.artist_influence import build_artist_influence
+
+    graph, artist_nodes = ucitaj_graf()
+    if SEED_PATH.exists() and any(
+        SEED_PATH.stat().st_mtime_ns > source.stat().st_mtime_ns
+        for source in (GRAF_PATH, ARTIST_NODES_PATH)
+    ):
+        raise ValueError("Graf izvodjaca je zastareo u odnosu na seedove. "
+                         "Pokreni: python -m scripts.pripremi --samo-graf-seed, "
+                         "zatim python -m scripts.pripremi --samo-rangovi")
+    catalog = ucitaj_katalog()
+    artifact = build_artist_influence(graph, artist_nodes, catalog["track_artist"], d=d)
+    _snimi_pickle(artifact, RANGOVI_PATH)
+    return artifact
 
 
-def ucitaj_rangove() -> None:
-    """Cita gotovu rang-listu iz artifacts/."""
-    pass
+def ucitaj_rangove() -> dict:
+    """Cita pripremljene ocene i ulazne veze; ne racuna PageRank ni crawling."""
+    command = "Pokreni: python -m scripts.pripremi --samo-rangovi"
+    if not RANGOVI_PATH.exists():
+        raise FileNotFoundError("Uticaj izvodjaca nije pripremljen. " + command)
+    for source in (GRAF_PATH, ARTIST_NODES_PATH, KATALOG_PATH, SEED_PATH):
+        if source.exists() and source.stat().st_mtime_ns > RANGOVI_PATH.stat().st_mtime_ns:
+            raise ValueError("Rangovi izvodjaca su zastareli. " + command)
+    with RANGOVI_PATH.open("rb") as source:
+        artifact = pickle.load(source)
+    if not isinstance(artifact, dict) or artifact.get("version") != 1:
+        raise ValueError("Format rangova izvodjaca nije podrzan. " + command)
+    return artifact
 
 
 def napravi_kdrvo() -> None:

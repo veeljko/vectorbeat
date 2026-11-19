@@ -9,6 +9,15 @@ from scripts import pripremi
 
 
 class PreparationCommandTests(unittest.TestCase):
+    def test_ranking_only_mode_uses_existing_graph_without_crawling(self):
+        pipeline = Mock()
+        pipeline.napravi_rangove.return_value = {"artists": pd.DataFrame(), "d": 0.85}
+        with patch.object(pripremi, "pipeline", pipeline), \
+                patch("sys.argv", ["pripremi", "--samo-rangovi"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            pripremi.main()
+        self.assertEqual([call[0] for call in pipeline.mock_calls], ["napravi_rangove"])
+
     def test_graph_seed_mode_only_prepares_seeds_then_graph(self):
         pipeline = Mock()
         pipeline.napravi_seed.return_value = pd.DataFrame({

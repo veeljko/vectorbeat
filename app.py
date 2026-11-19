@@ -84,6 +84,11 @@ def ucitaj_graf():
 
 
 @st.cache_data
+def ucitaj_rangove():
+    return pipeline.ucitaj_rangove()
+
+
+@st.cache_data
 def ucitaj_porodice():
     return pipeline.ucitaj_porodice()
 
@@ -278,7 +283,7 @@ with st.sidebar:
     #   prikaz.statistika("Reci u indeksu", broj_reci())
 
 
-if strana != "Evaluacija":
+if strana not in ("Evaluacija", "Izvodjaci"):
     porodice = ucitaj_porodice()
     try:
         df = ucitaj_katalog()
@@ -480,11 +485,14 @@ elif strana == "Evaluacija":
 # --- Izvodjaci ---------------------------------------------------------
 
 elif strana == "Izvodjaci":
-    st.title("Uticaj izvodjaca")
-    st.caption("Ko je najuticajniji izvodjac - PageRank nad grafom koji je "
-               "napravio crawler, naspram prostog brojanja linkova.")
-
-    # Koristi: ucitaj_graf(), prikaz.kartica_izvodjaca()
+    st.title("Najuticajniji izvođači")
+    try:
+        influence = ucitaj_rangove()
+    except (FileNotFoundError, ValueError) as error:
+        st.info(str(error))
+    else:
+        from mrvectorbeat.izvodjaci_prikaz import prikazi_uticaj
+        prikazi_uticaj(influence)
 
 
 # --- Radio -------------------------------------------------------------

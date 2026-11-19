@@ -68,6 +68,19 @@ Inace PyCharm ne vidi instalirane biblioteke i podvlaci importe crveno.
 
 Graf izvodjaca i Wikipedia tekstove za AI DJ Bot-a pravi vas crawler.
 
+Strana **Izvodjaci** prikazuje uticaj iz artefakta `artifacts/rangovi.pkl`.
+PageRank se racuna nad celim prikupljenim grafom, ukljucujuci zanrove, albume
+i izdavacke kuce; tek zatim se izdvajaju izvodjaci iz kataloga. Pored ocene
+prikazuje se broj razlicitih stranica koje upucuju na izvodjaca.
+Izabrano je `d = 0.85`: veze prenose najveci deo ranga, a nasumicni skokovi
+ublazavaju zadrzavanje ranga u zatvorenim krugovima. Prikazane ocene nisu
+ponovo normalizovane samo preko izvodjaca.
+
+Uz vec pripremljen katalog, seedovi i graf pripremaju se komandom
+`python -m scripts.pripremi --samo-graf-seed`, a uticaj komandom
+`python -m scripts.pripremi --samo-rangovi`. Druga komanda ne pokrece crawler.
+Puna priprema poziva oba koraka redom. Aplikacija samo ucitava gotov artefakt.
+
 ## Pokretanje
 
 Sve komande se pokrecu iz korena projekta, u terminalu u kom je
