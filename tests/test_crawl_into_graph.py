@@ -86,13 +86,14 @@ class CrawlIntoGraphTests(unittest.TestCase):
         }
         graph = {}
         crawler = Crawler()
-        with patch.object(crawler, "fetch_page", side_effect=lambda url: responses[url]) as fetch, \
+        with patch.object(crawler, "fetch_page", side_effect=lambda url, return_url=False:
+                          (*responses[url], url) if return_url else responses[url]) as fetch, \
                 contextlib.redirect_stdout(io.StringIO()):
             result = crawler.crawl_into_graph("Source", graph, max_pages=2)
         self.assertIs(result, graph)
         self.assertEqual(crawler.build_artist_nodes(["Source"], graph), {"Source": source})
         self.assertEqual(graph, {source: [peer], peer: [album], album: []})
-        self.assertEqual(fetch.call_args_list, [call(robots), call(source), call(peer)])
+        self.assertEqual(fetch.call_args_list, [call(robots), call(source, return_url=True), call(peer, return_url=True)])
 
     def test_build_artist_nodes_filters_missing_names_without_changing_graph_or_fetching(self):
         existing = WIKI + "Existing"

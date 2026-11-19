@@ -341,7 +341,7 @@ class SeedPipelineTests(unittest.TestCase):
         seed = WIKI + "Boston_(band)"
         crawler = Crawler()
         with patch.object(Crawler, "fetch_page", side_effect=[
-            (200, "User-agent: *"), (200, "<p>Rock band music.</p>"),
+            (200, "User-agent: *"), (200, "<p>Rock band music.</p>", seed),
         ]) as fetch, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(crawler.focused_crawl("Boston", max_pages=1),
                              {"Boston": {seed: "<p>Rock band music.</p>"}})

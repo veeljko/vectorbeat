@@ -380,14 +380,21 @@ def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]
     Prva gradnja obilazi svakog izvodjaca sa pronadjenim seedom i spaja veze u
     zajednicki graf. Sledeci pozivi citaju sacuvani graf i mapu izvodjaca.
     """
+    from mrvectorbeat.crawler.crawler import Crawler
+
+    Crawler.migrate_cached_aliases()
     seed_updated = SEED_PATH.stat().st_mtime_ns if SEED_PATH.exists() else 0
     graph_outdated = GRAF_PATH.exists() and seed_updated > GRAF_PATH.stat().st_mtime_ns
     nodes_outdated = ARTIST_NODES_PATH.exists() and seed_updated > ARTIST_NODES_PATH.stat().st_mtime_ns
     if (GRAF_PATH.exists() and ARTIST_NODES_PATH.exists()
             and not graph_outdated and not nodes_outdated):
-        return ucitaj_graf()
-
-    from mrvectorbeat.crawler.crawler import Crawler
+        graph, artist_nodes = ucitaj_graf()
+        if Crawler.canonicalize_graph(graph):
+            _snimi_pickle(graph, GRAF_PATH)
+        canonical_nodes = Crawler.build_artist_nodes(artist_nodes, graph, artist_seeds=artist_nodes)
+        if canonical_nodes != artist_nodes:
+            _snimi_pickle(canonical_nodes, ARTIST_NODES_PATH)
+        return graph, canonical_nodes
 
     seeds = napravi_seed()
     artist_seeds = {artist: seed if isinstance(seed, str) and seed else None
@@ -408,7 +415,10 @@ def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]
                 print(f"Preskacem izvodjaca bez potvrdjenog seeda: {artist}", flush=True)
                 continue
             crawler.crawl_into_graph(artist, graph, max_pages=max_pages,
-                                     threshold=threshold, seed=seed)
+                                     threshold=threshold, seed=seed, canonicalize=False)
+    # Merge once for the whole catalog, avoiding a full graph scan per artist.
+    changed = Crawler.canonicalize_graph(graph)
+    if changed or graph_outdated or not GRAF_PATH.exists():
         _snimi_pickle(graph, GRAF_PATH)
     artist_nodes = Crawler.build_artist_nodes(artists, graph, artist_seeds=artist_seeds)
     _snimi_pickle(artist_nodes, ARTIST_NODES_PATH)

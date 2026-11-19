@@ -4,7 +4,7 @@ from heapq import heappop, heappush
 from itertools import count
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from threading import Lock
+from threading import RLock
 import json
 import math
 import re
@@ -42,8 +42,10 @@ KEYWORDS = [
 ]
 
 class Crawler:
-    _request_lock = Lock()
+    _request_lock = RLock()
     _last_request_finished: float | None = None
+    _alias_cache_signature = None
+    _alias_cache = None
 
     @staticmethod
     def _cache_path(url: str) -> Path:
@@ -52,39 +54,166 @@ class Crawler:
         return PAGE_CACHE_DIR / (key + ".json")
 
     @staticmethod
-    def _read_cached_page(url: str) -> str | None:
+    def _read_cached_page(url: str) -> tuple[str, str] | None:
         try:
             cached = json.loads(Crawler._cache_path(url).read_text(encoding="utf-8"))
         except (FileNotFoundError, UnicodeError, ValueError):
             return None
         if (isinstance(cached, dict) and cached.get("url") == Crawler._normalize(url)
                 and isinstance(cached.get("text"), str)):
-            return cached["text"]
+            return cached["text"], Crawler._cached_final_url(cached)
         return None
 
     @staticmethod
-    def _save_cached_page(url: str, text: str) -> None:
-        """Replace one cache entry atomically, preserving complete UTF-8 content."""
-        path = Crawler._cache_path(url)
+    def _cached_final_url(cached: dict) -> str:
+        final_url = cached.get("final_url")
+        if not isinstance(final_url, str):
+            final_url = cached["url"]
+            # Old cache entries did not store the redirect destination. Wikipedia
+            # HTML normally contains its canonical address, allowing offline migration.
+            if Crawler.is_article(final_url):
+                canonical = BeautifulSoup(cached["text"], "html.parser").find("link", rel="canonical", href=True)
+                if canonical is not None:
+                    candidate = urljoin(final_url, canonical["href"])
+                    if Crawler.is_article(candidate):
+                        final_url = candidate
+        return Crawler._normalize(final_url)
+
+    @staticmethod
+    def _write_cache_json(path: Path, value: dict) -> None:
+        """Replace a cache entry atomically, preserving complete UTF-8 content."""
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
             with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
                                     suffix=".tmp", delete=False) as output:
                 temporary = Path(output.name)
-                json.dump({"url": Crawler._normalize(url), "text": text}, output,
-                          ensure_ascii=False)
+                json.dump(value, output, ensure_ascii=False)
             temporary.replace(path)
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
 
     @staticmethod
-    def fetch_page(url: str, *, use_cache: bool = True) -> tuple[int | None, str | None]:
+    def _save_cached_page(url: str, text: str, final_url: str | None = None) -> None:
+        Crawler._write_cache_json(Crawler._cache_path(url), {
+            "url": Crawler._normalize(url), "text": text,
+            "final_url": Crawler._normalize(final_url or url),
+        })
+
+    @staticmethod
+    def _load_alias_index() -> dict:
+        """Called under the shared lock; cache the small persistent alias index."""
+        path = PAGE_CACHE_DIR / "url_aliases.json"
+        stamp = path.stat().st_mtime_ns if path.exists() else None
+        signature = (path, stamp)
+        if Crawler._alias_cache_signature != signature:
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, UnicodeError, ValueError):
+                state = {}
+            if not isinstance(state, dict) or not isinstance(state.get("aliases"), dict):
+                state = {"aliases": {}, "legacy_cache_scanned": False}
+            Crawler._alias_cache = state
+            Crawler._alias_cache_signature = signature
+        return Crawler._alias_cache
+
+    @staticmethod
+    def _save_alias_index(state: dict) -> None:
+        path = PAGE_CACHE_DIR / "url_aliases.json"
+        Crawler._write_cache_json(path, state)
+        Crawler._alias_cache = state
+        Crawler._alias_cache_signature = (path, path.stat().st_mtime_ns)
+
+    @staticmethod
+    def _remember_aliases(aliases: Iterable[str], final_url: str) -> None:
+        if not Crawler.is_article(final_url):
+            return
+        state = Crawler._load_alias_index()
+        known = dict(state["aliases"])
+        final_url = Crawler._normalize(final_url)
+        for alias in aliases:
+            alias = Crawler._normalize(alias)
+            if alias != final_url and Crawler.is_article(alias):
+                known[alias] = final_url
+        if known != state["aliases"]:
+            Crawler._save_alias_index({**state, "aliases": known})
+
+    @staticmethod
+    def canonical_url(url: str, aliases: Mapping[str, str] | None = None) -> str:
+        """Resolve already confirmed redirects without any HTTP requests."""
+        if aliases is None:
+            with Crawler._request_lock:
+                aliases = Crawler._load_alias_index()["aliases"]
+        url = Crawler._normalize(url)
+        seen = set()
+        while url in aliases and url not in seen:
+            seen.add(url)
+            url = Crawler._normalize(aliases[url])
+        return url
+
+    @staticmethod
+    def migrate_cached_aliases() -> None:
+        """Recover redirect identities from old cached HTML once, without fetching."""
+        with Crawler._request_lock:
+            state = Crawler._load_alias_index()
+            if state.get("legacy_cache_scanned") or not PAGE_CACHE_DIR.exists():
+                return
+            aliases = dict(state["aliases"])
+            for path in PAGE_CACHE_DIR.glob("*.json"):
+                if path.name == "url_aliases.json":
+                    continue
+                try:
+                    cached = json.loads(path.read_text(encoding="utf-8"))
+                except (UnicodeError, ValueError):
+                    continue
+                if (not isinstance(cached, dict) or not isinstance(cached.get("url"), str)
+                        or not isinstance(cached.get("text"), str)):
+                    continue
+                source = Crawler._normalize(cached["url"])
+                target = Crawler._cached_final_url(cached)
+                if source != target and Crawler.is_article(source) and Crawler.is_article(target):
+                    aliases[source] = target
+            Crawler._save_alias_index({"aliases": aliases, "legacy_cache_scanned": True})
+
+    @staticmethod
+    def canonicalize_graph(graph: dict[str, list[str]]) -> bool:
+        """Merge confirmed URL aliases in place, including incoming edges.
+
+        Preserve all outgoing edges, remove duplicates and self-links produced
+        by merging, and return whether the graph changed.
+        """
+        with Crawler._request_lock:
+            aliases = dict(Crawler._load_alias_index()["aliases"])
+        merged = {}
+        seen = {}
+        for source, targets in graph.items():
+            source = Crawler.canonical_url(source, aliases)
+            neighbors = merged.setdefault(source, [])
+            known = seen.setdefault(source, set())
+            for target in targets:
+                target = Crawler.canonical_url(target, aliases)
+                if target != source and target not in known:
+                    neighbors.append(target)
+                    known.add(target)
+        for targets in tuple(merged.values()):
+            for target in targets:
+                merged.setdefault(target, [])
+        if graph == merged:
+            return False
+        graph.clear()
+        graph.update(merged)
+        return True
+
+    @staticmethod
+    def fetch_page(url: str, *, use_cache: bool = True, return_url: bool = False
+                   ) -> tuple[int | None, str | None] | tuple[int | None, str | None, str]:
         """Return (status, text), reading successful responses from disk first.
 
         HTTP 200 responses are saved in artifacts/crawler_pages, including
         robots.txt and successful redirect aliases. Failures are not cached.
+        return_url=True adds the final URL as a third return value. The default
+        two-value interface remains compatible with existing callers.
         Set use_cache=False for dynamic API calls, whose HTTP 200 body may
         contain temporary API errors that must be retried.
 
@@ -98,6 +227,9 @@ class Crawler:
         url = Crawler._normalize(url)
         redirects = 0
         aliases = []
+        def result(status, text, final_url):
+            return (status, text, final_url) if return_url else (status, text)
+
         try:
             # Keep the cache check and write under the same lock as HTTP, so two
             # instances requesting the same page do not both download it.
@@ -106,9 +238,20 @@ class Crawler:
                     if use_cache:
                         cached = Crawler._read_cached_page(url)
                         if cached is not None:
-                            for alias in aliases:
-                                Crawler._save_cached_page(alias, cached)
-                            return 200, cached
+                            text, final_url = cached
+                            final_url = Crawler.canonical_url(final_url)
+                            if final_url != url and not Crawler._cache_path(final_url).exists():
+                                Crawler._save_cached_page(final_url, text, final_url)
+                            for alias in [url, *aliases]:
+                                if alias != final_url:
+                                    Crawler._save_cached_page(alias, text, final_url)
+                            Crawler._remember_aliases([url, *aliases], final_url)
+                            return result(200, text, final_url)
+                        known_url = Crawler.canonical_url(url)
+                        if known_url != url:
+                            aliases.append(url)
+                            url = known_url
+                            continue
                     while REQUEST_INTERVAL_SECONDS > 0 and Crawler._last_request_finished is not None:
                         remaining = REQUEST_INTERVAL_SECONDS - (time.monotonic() - Crawler._last_request_finished)
                         if remaining <= 0:
@@ -131,14 +274,21 @@ class Crawler:
                         url = Crawler._normalize(next_url)
                         continue
                     data = response.text if status == 200 else None
+                    if status == 200 and Crawler.is_article(url):
+                        # MediaWiki can render a redirect target with HTTP 200.
+                        canonical = Crawler._cached_final_url({"url": url, "text": data})
+                        if canonical != url:
+                            aliases.append(url)
+                            url = canonical
                     if use_cache and status == 200:
                         Crawler._save_cached_page(url, data)
                         for alias in aliases:
-                            Crawler._save_cached_page(alias, data)
-                    return status, data
+                            Crawler._save_cached_page(alias, data, url)
+                        Crawler._remember_aliases(aliases, url)
+                    return result(status, data, url)
         except requests.RequestException as error:
             print("Request failed:", type(error).__name__)
-            return None, None
+            return result(None, None, url)
 
     @staticmethod
     def _raw_links(html: str, web: str) -> list[str]:
@@ -327,6 +477,7 @@ class Crawler:
 
         while queue and len(pages) < max_pages:
             _, _, url = heappop(queue)
+            url = self.canonical_url(url)
             if url in visited:
                 continue
             visited.add(url)
@@ -334,18 +485,24 @@ class Crawler:
                 continue
 
             # fetch_page returns status first, followed by the response body.
-            status, html = self.fetch_page(url)
+            status, html, final_url = self.fetch_page(url, return_url=True)
             if status != 200 or html is None:
                 continue
-            pages[url] = html
+            final_url = self.canonical_url(final_url)
+            visited.add(final_url)
+            if not self.is_article(final_url) or final_url in pages:
+                continue
+            pages[final_url] = html
 
             page_score = self.calculate_score(html)
             if page_score < threshold:
                 continue
-            relevant_urls.add(url)
-            for link in self.get_article_links(html, url):
-                link = self._normalize(link)
-                if link not in visited:
+            relevant_urls.add(final_url)
+            with Crawler._request_lock:
+                aliases = Crawler._load_alias_index()["aliases"]
+            for link in self.get_article_links(html, final_url):
+                link = self.canonical_url(link, aliases)
+                if link not in visited and link != final_url:
                     # Negative scores give a max-priority queue; ties use discovery order.
                     heappush(queue, (-page_score, next(sequence), link))
         rate = harvest_rate(pages, relevant_urls)
@@ -355,7 +512,7 @@ class Crawler:
 
     def crawl_into_graph(self, author_name: str, graph: dict[str, list[str]],
                          max_pages: int = 50, threshold: float = 2, *,
-                         seed: str | None = None) -> dict[str, list[str]]:
+                         seed: str | None = None, canonicalize: bool = True) -> dict[str, list[str]]:
         """Crawl one artist and merge discovered article links into graph in place.
 
         graph is a shared URL -> list[URL] adjacency dictionary. Existing nodes
@@ -366,18 +523,22 @@ class Crawler:
         if seed is not None:
             options["seed"] = seed
         pages = self.focused_crawl(author_name, **options)[author_name]
+        with Crawler._request_lock:
+            aliases = Crawler._load_alias_index()["aliases"]
         for url, html in pages.items():
-            source = self._normalize(url)
+            source = self.canonical_url(url, aliases)
             neighbors = graph.setdefault(source, [])
             known = set(neighbors)
             for link in self.get_article_links(html, source):
-                target = self._normalize(link)
+                target = self.canonical_url(link, aliases)
                 if target == source:
                     continue
                 graph.setdefault(target, [])
                 if target not in known:
                     neighbors.append(target)
                     known.add(target)
+        if canonicalize:
+            self.canonicalize_graph(graph)
         return graph
 
     @staticmethod
@@ -394,12 +555,14 @@ class Crawler:
             return {}
         if artist_seeds is None:
             artist_seeds = Crawler._artist_seeds()
+        with Crawler._request_lock:
+            aliases = Crawler._load_alias_index()["aliases"]
         artist_nodes = {}
         for artist in artist_names:
             seed = artist_seeds.get(artist)
             if not isinstance(seed, str) or not seed:
                 continue
-            seed = Crawler._normalize(seed)
+            seed = Crawler.canonical_url(seed, aliases)
             if seed in graph:
                 artist_nodes[artist] = seed
         return artist_nodes

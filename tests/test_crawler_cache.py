@@ -39,7 +39,7 @@ class CrawlerCacheTests(unittest.TestCase):
             self.assertEqual(Crawler().fetch_page(url), (200, html))
         get.assert_called_once()
         cached = json.loads(Crawler._cache_path(url).read_text(encoding="utf-8"))
-        self.assertEqual(cached, {"url": url, "text": html})
+        self.assertEqual(cached, {"url": url, "text": html, "final_url": url})
         script = """
 import importlib, json, sys
 from pathlib import Path
