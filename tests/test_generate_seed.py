@@ -64,6 +64,46 @@ class SeedResolverTests(unittest.TestCase):
             page["title_aliases"] = ["Catalog Artist"]
             self.assertFalse(WikipediaSeedResolver._candidate(page, "Catalog Artist"))
 
+    def test_industry_association_or_label_cannot_be_an_artist_even_when_it_mentions_performers(self):
+        for title, description, introduction in (
+            ("Australian Recording Industry Association", "Australian recording industry association",
+             "The Australian Recording Industry Association (ARIA) is a trade association representing musicians and bands."),
+            ("Australian Recording Industry Association", "",
+             "The Australian Recording Industry Association (ARIA) is a trade association representing musicians and bands."),
+            ("Example Records", "American record label",
+             "Example Records is a record label founded by a musician and representing singers."),
+            ("Aria", "Musical form",
+             "An aria is a musical composition performed by singers."),
+        ):
+            with self.subTest(title=title, description=description):
+                page = article(1, title, description, introduction)
+                page["title_aliases"] = ["ARIA"]
+                self.assertFalse(WikipediaSeedResolver._candidate(page, "ARIA"))
+
+    def test_artist_who_owns_a_label_and_band_named_record_company_remain_valid(self):
+        pages = [
+            article(1, "Example", "American singer and record label owner",
+                    "Example is an American singer who founded a record label."),
+            article(2, "The Record Company", "American rock band",
+                    "The Record Company is an American rock band."),
+            article(3, "The Record Company", "",
+                    "The Record Company is an American rock band."),
+        ]
+        for page in pages:
+            with self.subTest(page=page):
+                self.assertTrue(WikipediaSeedResolver._candidate(page, page["title"]))
+
+    def test_aria_association_redirect_cannot_resolve_the_catalog_recording_artist(self):
+        page = article(1, "Australian Recording Industry Association", "Australian trade association",
+                       "ARIA is a trade association representing musicians and record producers.")
+        page["title_aliases"] = ["ARIA"]
+        resolver = WikipediaSeedResolver()
+        with patch.object(resolver, "_search", return_value=[page]), \
+                patch.object(resolver, "_query", side_effect=AssertionError("Non-artist discography inspected")):
+            self.assertIsNone(resolver.resolve_artist_page(
+                "ARIA", albums=["Bleu Chanel (Na-No Remix)"], songs=["Bleu Chanel (Na-No Remix)"],
+            ))
+
     def test_exact_artist_article_does_not_require_complete_discography(self):
         page = article(83151929, "Anja Kotar", "Slovenian singer-songwriter",
                        "Anja Kotar is a Slovenian singer-songwriter based in California.")

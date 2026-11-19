@@ -29,6 +29,12 @@ _OTHER_TOPIC = re.compile(
     r"given name|city|town|village|continent|river|municipality|"
     r"fictional character|video game)\b", re.IGNORECASE,
 )
+_NON_ARTIST_ENTITY = re.compile(
+    r"\b(?:trade associations?|(?:recording|music) industry associations?|"
+    r"record(?:ing)? labels?|record compan(?:y|ies)|music publishers?|"
+    r"music(?:al)? (?:awards?|charts?|compositions?|forms?|genres?)|"
+    r"award ceremon(?:y|ies))\b", re.IGNORECASE,
+)
 _VERSION_WORDS = r"\b(?:remix(?:ed)?|remaster(?:ed)?|live|version|deluxe|edition|expanded)\b"
 _VERSION = re.compile(r"\s+[-–—]\s+.*" + _VERSION_WORDS + r".*$", re.I)
 _BRACKETS = re.compile(r"\([^()]*\)|\[[^\[\]]*\]")
@@ -158,6 +164,17 @@ class WikipediaSeedResolver:
         return direct + self._pages([result["title"] for result in results])
 
     @staticmethod
+    def _non_artist_subject(text: str) -> bool:
+        """Reject an organisation/work described before any performer identity.
+
+        Mentioning musicians does not make a record label an artist. Conversely,
+        a singer who later founded a label must remain a valid candidate.
+        """
+        other = _NON_ARTIST_ENTITY.search(text)
+        performer = _MUSIC_ENTITY.search(text)
+        return bool(other and (performer is None or other.start() < performer.start()))
+
+    @staticmethod
     def _candidate(page: dict, artist: str) -> bool:
         if (page.get("ns") != 0 or "missing" in page or "invalid" in page
                 or "disambiguation" in page.get("pageprops", {})):
@@ -170,6 +187,15 @@ class WikipediaSeedResolver:
         # Only the subject's introduction establishes that this is an artist.
         # Music mentioned elsewhere on a city/album page is not enough.
         introduction = page.get("extract", "").strip().split("\n", 1)[0]
+        # Inspect what the subject is, excluding its proper name (for example,
+        # The Record Company is a band, not a company). An exact title/redirect
+        # must never bypass this entity check for ambiguous catalog names.
+        subject = re.split(r"\b(?:is|was|are|were)\b", introduction, maxsplit=1, flags=re.I)[-1]
+        if WikipediaSeedResolver._non_artist_subject(description):
+            return False
+        if (not _MUSIC_ENTITY.search(description)
+                and WikipediaSeedResolver._non_artist_subject(subject)):
+            return False
         if not _MUSIC_ENTITY.search(description + " " + introduction[:500]):
             return False
         if WikipediaSeedResolver._matches_artist_name(page, artist):

@@ -49,6 +49,13 @@ class ArtistInfluenceTests(unittest.TestCase):
         self.assertEqual(result["graph_nodes"], 3)
         self.assertEqual(result["artists"].iloc[0]["incoming_links"], 2)
 
+    def test_influential_association_remains_in_graph_but_not_in_catalog_artist_table(self):
+        graph = {"aria-artist": [], "association": ["aria-artist"], "label": ["association"]}
+        result = build_artist_influence(graph, {"ARIA": "aria-artist", "Industry Association": "association"}, ["ARIA"])
+        self.assertEqual(result["graph_nodes"], 3)
+        self.assertEqual(result["artists"]["artist_name"].tolist(), ["ARIA"])
+        self.assertEqual(result["artists"]["url"].tolist(), ["aria-artist"])
+
     def test_empty_graph_and_missing_artist_nodes(self):
         result = build_artist_influence({}, {"Missing": "absent"}, ["Missing"])
         self.assertTrue(result["artists"].empty)

@@ -11,10 +11,10 @@ from .ndcg import dcg, ndcg_at_k
 from .page_ranking import one_step, pagerank
 from .precision_at_k import precision_at_k
 from .prf import PRFRanking, prf_terms
-from .pseudo_relevance_feedback import pseudo_relevance_feedback
+from .rocchio.pseudo_relevance_feedback import pseudo_relevance_feedback
 from .qlm import QLM
 from .reciprocal_rank import reciprocal_rank
-from .rocchio import rank_vector, rocchio
+from .rocchio.rocchio import rank_vector, rocchio
 
 # Crtica u nazivu tf-idf.py zahteva import preko import_module.
 TFIDFRanking = import_module(".tf-idf", __name__).TFIDFRanking
