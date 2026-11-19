@@ -37,6 +37,7 @@ SEED_PATH: Path = ARTIFACTS / "seed.parquet"
 GRAF_PATH: Path = ARTIFACTS / "graf.pkl"
 ARTIST_NODES_PATH: Path = ARTIFACTS / "artist_nodes.pkl"
 RANGOVI_PATH: Path = ARTIFACTS / "rangovi.pkl"
+SLICNI_IZVODJACI_PATH: Path = ARTIFACTS / "slicni_izvodjaci.pkl"
 
 
 # Kolone koje zadrzavamo u katalogu. Sve ostalo iz CSV-a nam ne treba.
@@ -465,6 +466,43 @@ def ucitaj_rangove() -> dict:
         artifact = pickle.load(source)
     if not isinstance(artifact, dict) or artifact.get("version") != 1:
         raise ValueError("Format rangova izvodjaca nije podrzan. " + command)
+    return artifact
+
+
+def napravi_slicne_izvodjace() -> dict:
+    """Iz postojecih graf i artist_nodes artefakata izvedi indeks slicnosti."""
+    if SLICNI_IZVODJACI_PATH.exists():
+        try:
+            return ucitaj_slicne_izvodjace()
+        except ValueError:
+            pass
+    from mrvectorbeat.search.ranking.similar_artists import build_similarity_index
+
+    graph, artist_nodes = ucitaj_graf()
+    if SEED_PATH.exists() and any(
+        SEED_PATH.stat().st_mtime_ns > source.stat().st_mtime_ns
+        for source in (GRAF_PATH, ARTIST_NODES_PATH)
+    ):
+        raise ValueError("Graf izvodjaca je zastareo u odnosu na seedove. "
+                         "Pokreni: python -m scripts.pripremi --samo-graf-seed, "
+                         "zatim python -m scripts.pripremi --samo-slicni-izvodjaci")
+    artifact = build_similarity_index(graph, artist_nodes)
+    _snimi_pickle(artifact, SLICNI_IZVODJACI_PATH)
+    return artifact
+
+
+def ucitaj_slicne_izvodjace() -> dict:
+    """Ucitaj pripremljene ulazne veze i tezine, bez obrade grafa ili HTTP-a."""
+    command = "Pokreni: python -m scripts.pripremi --samo-slicni-izvodjaci"
+    if not SLICNI_IZVODJACI_PATH.exists():
+        raise FileNotFoundError("Indeks slicnih izvodjaca nije pripremljen. " + command)
+    for source in (GRAF_PATH, ARTIST_NODES_PATH, SEED_PATH):
+        if source.exists() and source.stat().st_mtime_ns > SLICNI_IZVODJACI_PATH.stat().st_mtime_ns:
+            raise ValueError("Indeks slicnih izvodjaca je zastareo. " + command)
+    with SLICNI_IZVODJACI_PATH.open("rb") as source:
+        artifact = pickle.load(source)
+    if not isinstance(artifact, dict) or artifact.get("version") != 1:
+        raise ValueError("Format indeksa slicnih izvodjaca nije podrzan. " + command)
     return artifact
 
 

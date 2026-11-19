@@ -9,6 +9,15 @@ from scripts import pripremi
 
 
 class PreparationCommandTests(unittest.TestCase):
+    def test_similarity_only_mode_does_not_crawl_or_compute_pagerank(self):
+        pipeline = Mock()
+        pipeline.napravi_slicne_izvodjace.return_value = {"node_artists": {"node": ("Artist",)}}
+        with patch.object(pripremi, "pipeline", pipeline), \
+                patch("sys.argv", ["pripremi", "--samo-slicni-izvodjaci"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            pripremi.main()
+        self.assertEqual([call[0] for call in pipeline.mock_calls], ["napravi_slicne_izvodjace"])
+
     def test_ranking_only_mode_uses_existing_graph_without_crawling(self):
         pipeline = Mock()
         pipeline.napravi_rangove.return_value = {"artists": pd.DataFrame(), "d": 0.85}

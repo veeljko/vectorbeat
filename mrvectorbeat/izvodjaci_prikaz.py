@@ -1,6 +1,9 @@
-"""Display artist influence exclusively from the prepared ranking artifact."""
+"""Display artist influence and similarity from prepared artifacts."""
 
+import re
 import streamlit as st
+
+from mrvectorbeat.search.ranking.similar_artists import find_similar_artists
 
 
 def prikazi_uticaj(artifact: dict) -> None:
@@ -51,3 +54,39 @@ def prikazi_uticaj(artifact: dict) -> None:
             "Ulazne veze": st.column_config.NumberColumn(format="%d"),
             "Vikipedija": st.column_config.LinkColumn(display_text="Članak"),
         })
+
+
+def _markdown_text(text: str) -> str:
+    return re.sub(r"([\\`*_\[\]])", r"\\\1", text)
+
+
+def prikazi_slicne_izvodjace(index: dict) -> None:
+    st.caption("Izvođače povezuju stranice koje pokazuju na obojicu. "
+               "Stranice koje povezuju manje izvođača daju veći doprinos sličnosti.")
+    with st.expander("Kako se računa sličnost"):
+        st.write("Zajednička stranica doprinosi sa 1/k, gde je k broj različitih izvođača "
+                 "iz kataloga na koje pokazuje. Skor je zbir tih doprinosa. "
+                 "Više imena za isti Vikipedijin čvor broji se kao jedan izvođač.")
+    artists = sorted(index["artist_nodes"], key=lambda name: (name.casefold(), name))
+    if not artists:
+        st.info("U grafu još nema povezanih izvođača iz kataloga.")
+        return
+    artist = st.selectbox("Izaberite izvođača", artists, index=None,
+                          placeholder="Pretražite izvođače iz kataloga", key="slicni_izvodjac")
+    limit = st.selectbox("Broj sličnih izvođača", [5, 10, 20], index=1, key="slicni_izvodjaci_broj")
+    if artist is None:
+        st.info("Izaberite izvođača da biste videli srodne izvođače.")
+        return
+    results = find_similar_artists(index, artist, limit=limit)
+    if not results:
+        st.info("Nema drugih izvođača sa zajedničkim ulaznim stranicama u prikupljenom grafu.")
+        return
+    for position, result in enumerate(results, 1):
+        st.markdown(f"**{position}. {_markdown_text(result['artist_name'])}**")
+        st.caption(f"Sličnost: {result['score']:.6f} · Zajedničkih stranica: {len(result['shared_pages'])}")
+        links = [f"[{_markdown_text(page['title'])}](<{page['url']}>)" for page in result["shared_pages"]]
+        st.markdown("Oboje se pominju u: " + ", ".join(links))
+        with st.expander(f"Doprinos zajedničkih stranica — {result['artist_name']}"):
+            st.dataframe([{"Stranica": page["title"], "Doprinos": page["weight"]}
+                          for page in result["shared_pages"]], hide_index=True, width="stretch",
+                         column_config={"Doprinos": st.column_config.NumberColumn(format="%.6f")})

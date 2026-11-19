@@ -37,6 +37,8 @@ def main():
                        help="Koristi gotov katalog; pripremi seedove i graf, ponovi neresene seedove.")
     modes.add_argument("--samo-rangovi", action="store_true",
                        help="Koristi gotov katalog i graf; pripremi PageRank uticaj izvodjaca.")
+    modes.add_argument("--samo-slicni-izvodjaci", action="store_true",
+                       help="Iz gotovog grafa i artist_nodes pripremi indeks slicnih izvodjaca.")
     args = parser.parse_args()
     if args.samo_evaluacija:
         pipeline.napravi_evaluaciju()
@@ -49,6 +51,10 @@ def main():
     if args.samo_rangovi:
         rangovi = pipeline.napravi_rangove()
         print(f"PageRank: {len(rangovi['artists']):,} izvodjaca, d={rangovi['d']:g}", flush=True)
+        return
+    if args.samo_slicni_izvodjaci:
+        slicni = pipeline.napravi_slicne_izvodjace()
+        print(f"Slicni izvodjaci: {len(slicni['node_artists']):,} cvorova izvodjaca", flush=True)
         return
 
     # Katalog
@@ -84,6 +90,10 @@ def main():
     # PageRank nad grafom izvodjaca
     rangovi = pipeline.napravi_rangove()
     print(f"PageRank: {len(rangovi['artists']):,} izvodjaca, d={rangovi['d']:g}", flush=True)
+
+    # Indeks slicnosti iz istog, vec pripremljenog grafa i mape izvodjaca.
+    slicni = pipeline.napravi_slicne_izvodjace()
+    print(f"Slicni izvodjaci: {len(slicni['node_artists']):,} cvorova izvodjaca", flush=True)
 
     # k-d stablo
     pipeline.napravi_kdrvo()

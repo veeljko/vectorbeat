@@ -81,6 +81,16 @@ Uz vec pripremljen katalog, seedovi i graf pripremaju se komandom
 `python -m scripts.pripremi --samo-rangovi`. Druga komanda ne pokrece crawler.
 Puna priprema poziva oba koraka redom. Aplikacija samo ucitava gotov artefakt.
 
+Na istoj strani odeljak **Slicni izvodjaci** koristi postojeci `graf.pkl` i
+`artist_nodes.pkl`. Iz njih se izvodi indeks zajednickih ulaznih stranica;
+stranica koja pokazuje na `k` razlicitih izvodjaca doprinosi skoru sa `1/k`.
+Alternativna imena za isti cvor broje se jednom. Uz predloge se prikazuju
+zajednicke stranice sa linkovima i njihovim doprinosima.
+Indeks `artifacts/slicni_izvodjaci.pkl` priprema se komandom
+`python -m scripts.pripremi --samo-slicni-izvodjaci`, ili u punoj pripremi.
+Ovaj korak koristi vec sacuvan graf; aplikacija ocenjuje samo kandidate koji
+dele ulaznu stranicu sa izabranim izvodjacem, bez novih HTTP zahteva.
+
 ## Pokretanje
 
 Sve komande se pokrecu iz korena projekta, u terminalu u kom je

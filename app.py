@@ -88,6 +88,11 @@ def ucitaj_rangove():
     return pipeline.ucitaj_rangove()
 
 
+@st.cache_resource
+def ucitaj_slicne_izvodjace():
+    return pipeline.ucitaj_slicne_izvodjace()
+
+
 @st.cache_data
 def ucitaj_porodice():
     return pipeline.ucitaj_porodice()
@@ -493,6 +498,15 @@ elif strana == "Izvodjaci":
     else:
         from mrvectorbeat.izvodjaci_prikaz import prikazi_uticaj
         prikazi_uticaj(influence)
+
+    st.subheader("Slični izvođači")
+    try:
+        similar_artists = ucitaj_slicne_izvodjace()
+    except (FileNotFoundError, ValueError) as error:
+        st.info(str(error))
+    else:
+        from mrvectorbeat.izvodjaci_prikaz import prikazi_slicne_izvodjace
+        prikazi_slicne_izvodjace(similar_artists)
 
 
 # --- Radio -------------------------------------------------------------
