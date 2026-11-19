@@ -343,11 +343,15 @@ def ucitaj_jezicki() -> None:
 
 
 def napravi_seed(*, retry_unresolved: bool = False) -> pd.DataFrame:
-    """Ucitaj ili napravi seedove; opciono ponovi pretragu neresenih imena."""
+    """Ucitaj/napravi seedove, nastavi prekinut rad ili ponovi neresena imena."""
     existing = None
     if SEED_PATH.exists():
         existing = ucitaj_seed()
-        if not retry_unresolved or not (existing["seed"].isna() | existing["seed"].eq("")).any():
+        progress_path = SEED_PATH.with_name(SEED_PATH.stem + ".progress.parquet")
+        unfinished = (progress_path.exists()
+                      and progress_path.stat().st_mtime_ns >= SEED_PATH.stat().st_mtime_ns)
+        if not unfinished and (not retry_unresolved
+                               or not (existing["seed"].isna() | existing["seed"].eq("")).any()):
             return existing
     from mrvectorbeat.crawler.generate_seed import generate_seed
 
@@ -374,13 +378,28 @@ def _snimi_pickle(value: object, path: Path) -> None:
     temporary.replace(path)
 
 
-def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]:
+def napravi_graf(max_pages: int = 10, threshold: float = 2, *,
+                 cache_only: bool = False) -> tuple[dict, dict]:
     """Vrati (graf, artist_nodes); nedostajuce artefakte izgradi i sacuvaj.
 
-    Prva gradnja obilazi svakog izvodjaca sa pronadjenim seedom i spaja veze u
-    zajednicki graf. Sledeci pozivi citaju sacuvani graf i mapu izvodjaca.
+    Prva gradnja obilazi svakog izvodjaca sa pronadjenim seedom, zatim gradi graf
+    preuzetih clanaka iz kesa. Izvodjaci se obilaze redom, sa jednim HTTP zahtevom
+    u trenutku i pauzom od najmanje sekunde. Sledeci pozivi citaju artefakte.
+    cache_only=True ponovo gradi graf iz svih lokalnih HTML stranica, jednu po
+    jednu, bez HTTP zahteva ili ponovnog trazenja seedova.
     """
     from mrvectorbeat.crawler.crawler import Crawler
+
+    if cache_only:
+        seeds = ucitaj_seed()
+        artist_seeds = {artist: seed if isinstance(seed, str) and seed else None
+                        for artist, seed in seeds.itertuples(index=False, name=None)}
+        graph = Crawler.build_graph_from_cache()
+        artist_nodes = Crawler.build_artist_nodes(artist_seeds, graph, artist_seeds=artist_seeds)
+        _snimi_pickle(graph, GRAF_PATH)
+        _snimi_pickle(artist_nodes, ARTIST_NODES_PATH)
+        print(f"Graf iz kesa: {len(graph)} cvorova, {len(artist_nodes)} izvodjaca.", flush=True)
+        return graph, artist_nodes
 
     Crawler.migrate_cached_aliases()
     seed_updated = SEED_PATH.stat().st_mtime_ns if SEED_PATH.exists() else 0
@@ -404,20 +423,22 @@ def napravi_graf(max_pages: int = 50, threshold: float = 2) -> tuple[dict, dict]
         # A missing lookup can be rebuilt without downloading the graph again.
         with GRAF_PATH.open("rb") as source:
             graph = pickle.load(source)
+        changed = Crawler.canonicalize_graph(graph)
     else:
-        graph = {}
-        if GRAF_PATH.exists():
-            with GRAF_PATH.open("rb") as source:
-                graph = pickle.load(source)
         crawler = Crawler()
+        print("HTML preuzimanje: serijski obilazak izvodjaca.", flush=True)
         for artist, seed in artist_seeds.items():
             if seed is None:
                 print(f"Preskacem izvodjaca bez potvrdjenog seeda: {artist}", flush=True)
                 continue
-            crawler.crawl_into_graph(artist, graph, max_pages=max_pages,
-                                     threshold=threshold, seed=seed, canonicalize=False)
-    # Merge once for the whole catalog, avoiding a full graph scan per artist.
-    changed = Crawler.canonicalize_graph(graph)
+            # Discovery graphs are temporary. Persist only the graph induced
+            # by all downloaded pages after the serial crawl has completed.
+            crawler.crawl_into_graph(
+                artist, {}, max_pages=max_pages, threshold=threshold,
+                seed=seed, canonicalize=False,
+            )
+        graph = Crawler.build_graph_from_cache()
+        changed = True
     if changed or graph_outdated or not GRAF_PATH.exists():
         _snimi_pickle(graph, GRAF_PATH)
     artist_nodes = Crawler.build_artist_nodes(artists, graph, artist_seeds=artist_seeds)
@@ -465,7 +486,7 @@ def napravi_rangove(d: float = 0.85) -> dict:
 
 
 def ucitaj_rangove() -> dict:
-    """Cita pripremljene ocene i ulazne veze; ne racuna PageRank ni crawling."""
+    """Cita tabelu izvodjaca i metapodatke, bez recnika ocena svih cvorova."""
     command = "Pokreni: python -m scripts.pripremi --samo-rangovi"
     if not RANGOVI_PATH.exists():
         raise FileNotFoundError("Uticaj izvodjaca nije pripremljen. " + command)
@@ -474,7 +495,7 @@ def ucitaj_rangove() -> dict:
             raise ValueError("Rangovi izvodjaca su zastareli. " + command)
     with RANGOVI_PATH.open("rb") as source:
         artifact = pickle.load(source)
-    if not isinstance(artifact, dict) or artifact.get("version") != 1:
+    if not isinstance(artifact, dict) or artifact.get("version") != 2:
         raise ValueError("Format rangova izvodjaca nije podrzan. " + command)
     return artifact
 

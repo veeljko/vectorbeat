@@ -76,10 +76,46 @@ Izabrano je `d = 0.85`: veze prenose najveci deo ranga, a nasumicni skokovi
 ublazavaju zadrzavanje ranga u zatvorenim krugovima. Prikazane ocene nisu
 ponovo normalizovane samo preko izvodjaca.
 
+`rangovi.pkl` cuva tabelu izvodjaca sa njihovim ocenama i brojem ulaznih veza,
+uz parametre i metapodatke pripreme. Recnik PageRank ocena svih stranica koristi
+se samo tokom racunanja i ne cuva se u artefaktu. Stariji format osvezi komandom
+`python -m scripts.pripremi --samo-rangovi`.
+
 Uz vec pripremljen katalog, seedovi i graf pripremaju se komandom
 `python -m scripts.pripremi --samo-graf-seed`, a uticaj komandom
 `python -m scripts.pripremi --samo-rangovi`. Druga komanda ne pokrece crawler.
 Puna priprema poziva oba koraka redom. Aplikacija samo ucitava gotov artefakt.
+
+Seedovi se prvo proveravaju grupnim Wikipedia API upitima za najvise 10 imena;
+samo nereseni ili dvosmisleni slucajevi idu na dodatnu pretragu. Napredak se
+cuva u `artifacts/seed.progress.parquet` posle svake grupe i pri prekidu rada.
+Ponovno pokretanje nastavlja od zavrsenih imena, ukljucujuci proverena imena
+bez rezultata. Zavrsni `seed.parquet` i dalje ima samo `artist_name` i `seed`,
+a zamenjuje se tek kada se obradi ceo katalog.
+
+HTML se preuzima serijski, sa najvise 10 stranica po izvodjacu. Svi HTTP
+zahtevi, ukljucujuci seed API, robots.txt i svaki korak preusmeravanja, dele
+isto zakljucavanje. Od zavrsetka jednog zahteva do pocetka sledeceg prolazi
+najmanje jedna sekunda (`REQUEST_INTERVAL_SECONDS = 1.0` u crawler.py).
+Trajna `requests.Session` ponovo koristi HTTP veze. Uspesno preuzete stranice
+i `robots.txt` ostaju u `artifacts/crawler_pages/` i citaju se sa diska;
+citanje iz kesa ne ceka pauzu za HTTP. Privremena opcija `--html-workers`
+i paralelni obilazak su uklonjeni.
+
+Kada su HTML stranice vec preuzete, graf se moze napraviti direktno iz kesa:
+
+```bash
+python -c "from mrvectorbeat.pipeline import napravi_graf; napravi_graf(cache_only=True)"
+```
+
+Ovaj rezim u prvom prolazu popisuje kanonske URL-ove svih sacuvanih Wikipedia
+clanaka, a u drugom zadrzava samo veze izmedju njih. Nepreuzeti URL-ovi se ne
+dodaju kao cvorovi; preusmeravanja se objedinjuju, a preuzete stranice bez veza
+ostaju u grafu. Isto pravilo vazi i za zavrsni graf posle crawl-a.
+Obradjuje se jedna HTML stranica odjednom, bez novog obilaska ili pretrage seedova.
+Deljeni URL-ovi koriste isti objekat stringa da bi graf zauzimao manje memorije.
+Posle gradnje pokreni `python -m scripts.pripremi --samo-rangovi`, pa
+`python -m scripts.pripremi --samo-slicni-izvodjaci`.
 
 Na istoj strani odeljak **Slicni izvodjaci** koristi postojeci `graf.pkl` i
 `artist_nodes.pkl`. Iz njih se izvodi indeks zajednickih ulaznih stranica;

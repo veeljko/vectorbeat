@@ -19,28 +19,33 @@ def build_artist_influence(graph: Mapping[Hashable, Iterable[Hashable]],
     Each source page counts once toward a target's incoming-page count. Genres,
     albums, labels and other non-artist pages participate in both calculations.
     Only catalog names mapped to nodes in the graph are included in the table.
+    Full-graph ranks are temporary: the returned artifact contains only the
+    catalog table and small preparation metadata, not per-page dictionaries.
     """
     adjacency = {source: tuple(dict.fromkeys(targets)) for source, targets in graph.items()}
     for targets in tuple(adjacency.values()):
         for target in targets:
             adjacency.setdefault(target, ())
     ranks, changes = pagerank(adjacency, d=d, eps=eps, max_iterations=max_iterations)
-    incoming = dict.fromkeys(adjacency, 0)
+    catalog_names = set(catalog_artists)
+    mapped_artists = {artist: node for artist, node in artist_nodes.items()
+                      if artist in catalog_names and node in ranks}
+    incoming = dict.fromkeys(mapped_artists.values(), 0)
     for targets in adjacency.values():
         for target in targets:
-            incoming[target] += 1
+            if target in incoming:
+                incoming[target] += 1
 
-    catalog_names = set(catalog_artists)
     rows = [{"artist_name": artist, "url": node, "pagerank": ranks[node],
              "incoming_links": incoming[node]}
-            for artist, node in artist_nodes.items() if artist in catalog_names and node in ranks]
+            for artist, node in mapped_artists.items()]
     rows.sort(key=lambda row: (-row["pagerank"], row["artist_name"].casefold(), row["artist_name"]))
     table = pd.DataFrame(rows, columns=["artist_name", "url", "pagerank", "incoming_links"])
     table.insert(0, "position", range(1, len(table) + 1))
     return {
-        "version": 1, "d": d, "eps": eps, "max_iterations": max_iterations,
+        "version": 2, "d": d, "eps": eps, "max_iterations": max_iterations,
         "converged": not changes or changes[-1] < eps, "changes": changes,
-        "page_ranks": ranks, "incoming_links": incoming, "artists": table,
+        "artists": table,
         "graph_nodes": len(adjacency), "graph_edges": sum(map(len, adjacency.values())),
         "catalog_artists": len(catalog_names),
         "missing_artists": sorted(catalog_names - {row["artist_name"] for row in rows}),

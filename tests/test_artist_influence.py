@@ -1,4 +1,5 @@
 import os
+import pickle
 import tempfile
 import unittest
 from copy import deepcopy
@@ -25,23 +26,25 @@ class ArtistInfluenceTests(unittest.TestCase):
         original = deepcopy(graph)
         result = build_artist_influence(graph, artists, ["Artist A", "Artist B", "Missing"])
         expected, _ = pagerank({key: list(dict.fromkeys(values)) for key, values in graph.items()})
-        self.assertEqual(result["page_ranks"], expected)
+        self.assertNotIn("page_ranks", result)
+        self.assertNotIn("incoming_links", result)
         self.assertEqual(result["graph_nodes"], 6)
         self.assertEqual(graph, original)
         table = result["artists"]
         self.assertEqual(table["artist_name"].tolist(), ["Artist A", "Artist B"])
         self.assertEqual(table["incoming_links"].tolist(), [1, 1])
+        for row in table.itertuples(index=False):
+            self.assertEqual(row.pagerank, expected[row.url])
         # Equal incoming counts, but A receives a link from a more influential page.
         self.assertGreater(table.iloc[0]["pagerank"], table.iloc[1]["pagerank"])
         self.assertEqual(table["position"].tolist(), [1, 2])
-        self.assertAlmostEqual(sum(result["page_ranks"].values()), 1)
         self.assertLess(table["pagerank"].sum(), 1)
         self.assertEqual(result["missing_artists"], ["Missing"])
 
     def test_incoming_counts_unique_source_pages_and_includes_destination_only_nodes(self):
         result = build_artist_influence({"genre": ["a", "a"], "album": ["a"]},
                                         {"A": "a"}, ["A"])
-        self.assertEqual(result["incoming_links"]["a"], 2)
+        self.assertNotIn("incoming_links", result)
         self.assertEqual(result["graph_edges"], 2)
         self.assertEqual(result["graph_nodes"], 3)
         self.assertEqual(result["artists"].iloc[0]["incoming_links"], 2)
@@ -50,7 +53,7 @@ class ArtistInfluenceTests(unittest.TestCase):
         result = build_artist_influence({}, {"Missing": "absent"}, ["Missing"])
         self.assertTrue(result["artists"].empty)
         self.assertEqual(result["missing_artists"], ["Missing"])
-        self.assertEqual(result["page_ranks"], {})
+        self.assertNotIn("page_ranks", result)
         self.assertTrue(result["converged"])
 
     def test_equal_scores_have_deterministic_name_order(self):
@@ -64,6 +67,16 @@ class ArtistInfluenceTests(unittest.TestCase):
             result = build_artist_influence({"a": ["b"], "b": ["b"]}, {"A": "a"},
                                             ["A"], max_iterations=1)
         self.assertFalse(result["converged"])
+
+    def test_serialized_artifact_does_not_grow_with_non_artist_page_dictionaries(self):
+        artists = {"A": "artist-a", "B": "artist-b"}
+        small_graph = {"artist-a": [], "artist-b": [], "other": []}
+        large_graph = {**small_graph, **{f"non-artist-{number}": [] for number in range(1000)}}
+        small = build_artist_influence(small_graph, artists, artists)
+        large = build_artist_influence(large_graph, artists, artists)
+        self.assertLess(abs(len(pickle.dumps(large)) - len(pickle.dumps(small))), 256)
+        self.assertLess(large["artists"].iloc[0]["pagerank"], small["artists"].iloc[0]["pagerank"])
+        self.assertEqual(len(large["artists"]), 2)
 
 
 class ArtistInfluencePipelineTests(unittest.TestCase):
@@ -93,7 +106,12 @@ class ArtistInfluencePipelineTests(unittest.TestCase):
         pd.testing.assert_frame_equal(loaded["artists"], built["artists"])
         pd.testing.assert_frame_equal(reused["artists"], built["artists"])
         self.assertEqual(loaded["d"], 0.85)
-        self.assertEqual(loaded["page_ranks"], built["page_ranks"])
+        with pipeline.RANGOVI_PATH.open("rb") as source:
+            saved = pickle.load(source)
+        self.assertNotIn("page_ranks", saved)
+        self.assertNotIn("incoming_links", saved)
+        self.assertNotIn("page_ranks", loaded)
+        self.assertEqual(saved["version"], 2)
 
     def test_missing_artifact_shows_preparation_command(self):
         with self.assertRaisesRegex(FileNotFoundError, "python -m scripts.pripremi --samo-rangovi"):
@@ -106,7 +124,23 @@ class ArtistInfluencePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "zastareli"):
             pipeline.ucitaj_rangove()
         pipeline.napravi_rangove()
-        self.assertEqual(pipeline.ucitaj_rangove()["version"], 1)
+        self.assertEqual(pipeline.ucitaj_rangove()["version"], 2)
+
+    def test_legacy_artifact_is_rejected_and_preparation_replaces_it_with_compact_format(self):
+        expected = pipeline.napravi_rangove()
+        legacy = {**expected, "version": 1,
+                  "page_ranks": {"artist-a": 0.1, "genre": 0.2},
+                  "incoming_links": {"artist-a": 1, "genre": 2}}
+        pipeline._snimi_pickle(legacy, pipeline.RANGOVI_PATH)
+        with self.assertRaisesRegex(ValueError, "Format.*--samo-rangovi"):
+            pipeline.ucitaj_rangove()
+        with patch("mrvectorbeat.search.ranking.artist_influence.pagerank", wraps=pagerank) as compute:
+            refreshed = pipeline.napravi_rangove()
+        compute.assert_called_once()
+        self.assertEqual(refreshed["version"], 2)
+        self.assertNotIn("page_ranks", refreshed)
+        self.assertNotIn("incoming_links", refreshed)
+        pd.testing.assert_frame_equal(refreshed["artists"], expected["artists"])
 
     def test_changed_damping_regenerates_artifact(self):
         pipeline.napravi_rangove()

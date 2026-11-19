@@ -34,7 +34,7 @@ class CrawlerCacheTests(unittest.TestCase):
     def test_saved_page_survives_a_new_python_process_without_http(self):
         url = WIKI + "Bj%C3%B6rk"
         html = "<p>Bj\u00f6rk \u266b</p>"
-        with patch("mrvectorbeat.crawler.crawler.requests.get",
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get",
                    return_value=Mock(status_code=200, text=html)) as get:
             self.assertEqual(Crawler().fetch_page(url), (200, html))
         get.assert_called_once()
@@ -46,7 +46,7 @@ from pathlib import Path
 from unittest.mock import patch
 module = importlib.import_module('mrvectorbeat.crawler.crawler')
 module.PAGE_CACHE_DIR = Path(sys.argv[1])
-with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected HTTP')):
+with patch.object(module.requests.Session, 'get', side_effect=AssertionError('Unexpected HTTP')):
     print(json.dumps(module.Crawler().fetch_page(sys.argv[2])))
 """
         result = subprocess.run([sys.executable, "-c", script, str(self.cache_dir), url],
@@ -55,7 +55,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
         self.assertEqual(json.loads(result.stdout), [200, html])
 
     def test_equivalent_article_addresses_share_one_cache_entry(self):
-        with patch("mrvectorbeat.crawler.crawler.requests.get",
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get",
                    return_value=Mock(status_code=200, text="ABBA")) as get:
             self.assertEqual(Crawler.fetch_page(WIKI + "ABBA"), (200, "ABBA"))
             for suffix in ("ABB%41", "ABBA?oldid=123", "ABBA#History"):
@@ -65,7 +65,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
 
     def test_redirect_source_and_destination_both_reuse_downloaded_content(self):
         source, target = WIKI + "Alias", WIKI + "Artist"
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=[
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=[
             Mock(status_code=302, headers={"Location": target}),
             Mock(status_code=200, text="HTML"),
         ]) as get:
@@ -77,7 +77,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
     def test_redirect_to_cached_destination_only_fetches_redirect(self):
         source, target = WIKI + "Alias", WIKI + "Artist"
         Crawler._save_cached_page(target, "HTML")
-        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=Mock(
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=Mock(
             status_code=302, headers={"Location": target},
         )) as get:
             self.assertEqual(Crawler.fetch_page(source), (200, "HTML"))
@@ -85,7 +85,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
 
     def test_failed_requests_are_retried_instead_of_being_cached(self):
         url = WIKI + "Artist"
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=[
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=[
             requests.ConnectionError("Offline"), Mock(status_code=503),
             Mock(status_code=200, text="Recovered"),
         ]) as get, contextlib.redirect_stdout(io.StringIO()):
@@ -97,7 +97,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
         self.assertEqual(get.call_count, 3)
 
     def test_empty_successful_page_is_cached_and_query_parameters_stay_distinct(self):
-        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=Mock(
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=Mock(
             status_code=200, text="",
         )) as get:
             for url in ("https://example.com/page?q=one", "https://example.com/page?q=two"):
@@ -108,7 +108,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
     def test_corrupt_entry_is_downloaded_again_and_replaced(self):
         url = WIKI + "Artist"
         Crawler._cache_path(url).write_text("{partial", encoding="utf-8")
-        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=Mock(
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=Mock(
             status_code=200, text="Repaired",
         )) as get:
             self.assertEqual(Crawler.fetch_page(url), (200, "Repaired"))
@@ -133,7 +133,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
                 errors.append(error)
 
         first, second = Thread(target=fetch), Thread(target=fetch)
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request) as get:
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request) as get:
             first.start()
             try:
                 self.assertTrue(entered.wait(timeout=2))
@@ -154,19 +154,19 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
             seed: '<p>Music band.</p><a href="/wiki/Peer">Peer</a>',
             peer: "<p>Music singer.</p>",
         }
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=lambda url, **kwargs:
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=lambda url, **kwargs:
                    Mock(status_code=200, text=responses[url])) as get, \
                 contextlib.redirect_stdout(io.StringIO()):
             first = Crawler().focused_crawl("Artist", seed=seed, max_pages=2)
         self.assertEqual(get.call_count, 3)
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=AssertionError("HTTP")), \
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=AssertionError("HTTP")), \
                 contextlib.redirect_stdout(io.StringIO()):
             second = Crawler().focused_crawl("Artist", seed=seed, max_pages=2)
         self.assertEqual(first, second)
 
     def test_api_errors_with_http_200_are_not_cached(self):
         resolver = WikipediaSeedResolver()
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=[
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=[
             Mock(status_code=200, text=json.dumps({"error": {"code": "maxlag"}})),
             Mock(status_code=200, text=json.dumps({"query": {"search": []}})),
         ]) as get, patch("mrvectorbeat.crawler.generate_seed.time.sleep"):

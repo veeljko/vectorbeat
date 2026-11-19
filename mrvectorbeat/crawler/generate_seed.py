@@ -15,6 +15,7 @@ from mrvectorbeat.crawler.crawler import Crawler
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 DEFAULT_SEED_PATH = Path(__file__).resolve().parents[2] / "artifacts" / "seed.parquet"
+SEED_BATCH_SIZE = 10
 _MUSIC_ENTITY = re.compile(
     r"\b(?:bands?|musicians?|singers?|songwriters?|rappers?|composers?|"
     r"guitarists?|pianists?|vocalists?|drummers?|bassists?|saxophonists?|"
@@ -67,6 +68,19 @@ class WikipediaSeedResolver:
 
     def __init__(self):
         self._full_text: dict[int, str] = {}
+        self._direct_pages: dict[str, list[dict]] = {}
+
+    def prefetch_titles(self, artist_names: Iterable[str]) -> None:
+        """Batch direct title lookups; keep each verified alias with its target."""
+        names = list(dict.fromkeys(name.strip() for name in artist_names))
+        for offset in range(0, len(names), SEED_BATCH_SIZE):
+            batch = names[offset:offset + SEED_BATCH_SIZE]
+            pages = self._pages(batch)
+            for name in batch:
+                # Cache missing titles too: fallback search must not repeat the
+                # same direct lookup for every unresolved artist.
+                self._direct_pages[name] = [page for page in pages
+                                            if self._matches_artist_name(page, name)]
 
     def _query(self, **parameters) -> dict:
         # Use the programmatic Action API under Wikimedia's API usage policy.
@@ -129,7 +143,10 @@ class WikipediaSeedResolver:
         return bool(name) and any(_normalize(title) == name for title in titles)
 
     def _search(self, query: str, *, exact_title: str | None = None) -> list[dict]:
-        direct = self._pages([exact_title]) if exact_title else []
+        direct = []
+        if exact_title:
+            direct = (self._direct_pages[exact_title] if exact_title in self._direct_pages
+                      else self._pages([exact_title]))
         # A direct title lookup also finds articles missing from search results.
         if any(self._candidate(page, exact_title)
                and self._matches_artist_name(page, exact_title) for page in direct):
@@ -238,34 +255,77 @@ class WikipediaSeedResolver:
         return None
 
 
+def _seed_table(seeds: dict[str, str | None]) -> pd.DataFrame:
+    return pd.DataFrame(seeds.items(), columns=["artist_name", "seed"]).astype("string")
+
+
+def _save_seed_table(table: pd.DataFrame, path: Path) -> None:
+    """Replace only a complete parquet file, never exposing a partial write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp.parquet")
+    try:
+        table.to_parquet(temporary, index=False)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def generate_seed(catalog: pd.DataFrame, path: Path = DEFAULT_SEED_PATH, *,
                   existing: pd.DataFrame | None = None) -> pd.DataFrame:
     """Resolve every distinct catalog artist and atomically save artist_name, seed.
 
     Unresolved names remain in the artifact with a null seed. No guessed URL is
     substituted. Preparation aborts on HTTP/API failures without replacing a
-    previous artifact. Pass existing to keep previously resolved URLs and retry
-    only unresolved/new artists.
+    previous artifact. Direct title lookups are batched in groups of ten.
+    Completed artists (including genuine missing matches) are checkpointed to
+    seed.progress.parquet after each batch and on interruption. The final file
+    is replaced only when all artists are processed. Pass existing to preserve
+    resolved URLs and retry unresolved/new artists; interrupted retries resume.
     """
     resolver = WikipediaSeedResolver()
     previous = {} if existing is None else dict(existing.itertuples(index=False, name=None))
-    rows = []
-    artists = catalog.dropna(subset=["track_artist"]).groupby("track_artist", sort=True)
-    total = artists.ngroups
-    for index, (artist, tracks) in enumerate(artists, 1):
-        seed = previous.get(artist)
-        if not isinstance(seed, str) or not seed.strip():
-            seed = resolver.resolve_artist_page(
-                artist, albums=tracks.get("track_album_name", []), songs=tracks.get("track_name", []),
-            )
-        rows.append({"artist_name": artist, "seed": seed})
-        print(f"Seed {index}/{total}: {artist} -> {seed or 'unresolved'}", flush=True)
-    table = pd.DataFrame(rows, columns=["artist_name", "seed"]).astype("string")
     path = Path(path)
-    if existing is not None and path.exists() and table.equals(existing.astype("string")):
-        return table
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp.parquet")
-    table.to_parquet(temporary, index=False)
-    temporary.replace(path)
+    progress_path = path.with_name(path.stem + ".progress.parquet")
+    artists = list(catalog.dropna(subset=["track_artist"]).groupby("track_artist", sort=True))
+    names = {artist for artist, _ in artists}
+    completed = {artist: seed for artist, seed in previous.items()
+                 if artist in names and isinstance(seed, str) and seed.strip()}
+    if progress_path.exists() and (not path.exists()
+                                  or progress_path.stat().st_mtime_ns >= path.stat().st_mtime_ns):
+        progress = pd.read_parquet(progress_path)
+        if (list(progress.columns) != ["artist_name", "seed"]
+                or progress["artist_name"].isna().any()
+                or progress["artist_name"].duplicated().any()):
+            raise ValueError("Invalid seed progress artifact.")
+        for artist, seed in progress.itertuples(index=False, name=None):
+            if artist in names and artist not in completed:
+                completed[artist] = seed if isinstance(seed, str) and seed.strip() else None
+        print(f"Resuming seed lookup: {len(completed)}/{len(artists)} artists completed.", flush=True)
+
+    dirty = False
+    try:
+        for offset in range(0, len(artists), SEED_BATCH_SIZE):
+            batch = artists[offset:offset + SEED_BATCH_SIZE]
+            pending = [artist for artist, _ in batch if artist not in completed]
+            resolver.prefetch_titles(pending)
+            for index, (artist, tracks) in enumerate(batch, offset + 1):
+                if artist not in completed:
+                    completed[artist] = resolver.resolve_artist_page(
+                        artist, albums=tracks.get("track_album_name", []), songs=tracks.get("track_name", []),
+                    )
+                    dirty = True
+                print(f"Seed {index}/{len(artists)}: {artist} -> {completed[artist] or 'unresolved'}", flush=True)
+            if dirty:
+                _save_seed_table(_seed_table(completed), progress_path)
+                dirty = False
+    finally:
+        # Also preserve completed artists if a later request fails or Ctrl+C
+        # interrupts the current batch. The failing artist is not marked done.
+        if dirty:
+            _save_seed_table(_seed_table(completed), progress_path)
+
+    table = _seed_table({artist: completed[artist] for artist, _ in artists})
+    if existing is None or not path.exists() or not table.equals(existing.astype("string")):
+        _save_seed_table(table, path)
+    progress_path.unlink(missing_ok=True)
     return table

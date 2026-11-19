@@ -21,7 +21,7 @@ class CrawlerTests(unittest.TestCase):
     def test_fetch_page_returns_html_for_success_with_default_headers_and_timeout(self):
         url = WIKI + "Information_retrieval"
         response = Mock(status_code=200, text="<html><p>Information retrieval</p></html>")
-        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=response) as get:
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=response) as get:
             self.assertEqual(Crawler().fetch_page(url), (200, response.text))
         get.assert_called_once()
         self.assertEqual(get.call_args.args, (url,))
@@ -31,9 +31,10 @@ class CrawlerTests(unittest.TestCase):
     def test_fetch_page_does_not_read_body_for_non_200_status(self):
         for status in (204, 301, 403, 404, 500):
             with self.subTest(status=status):
-                response = Mock(spec=["status_code"])
+                response = Mock(spec=["status_code", "headers", "close"])
                 response.status_code = status
-                with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=response):
+                response.headers = {}
+                with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=response):
                     self.assertEqual(Crawler.fetch_page(WIKI + "Missing"), (status, None))
 
     def test_fetch_page_handles_timeout_and_connection_errors(self):
@@ -41,7 +42,7 @@ class CrawlerTests(unittest.TestCase):
                       requests.RequestException("Request failed")):
             with self.subTest(error=type(error).__name__):
                 output = io.StringIO()
-                with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=error), \
+                with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=error), \
                         contextlib.redirect_stdout(output):
                     self.assertEqual(Crawler.fetch_page(WIKI + "Music"), (None, None))
                 self.assertIn("Request failed: " + type(error).__name__, output.getvalue())
@@ -50,7 +51,7 @@ class CrawlerTests(unittest.TestCase):
         headers = {"User-Agent": "CustomCrawler/1.0", "Accept": "text/html"}
         original_headers = headers.copy()
         response = Mock(status_code=200, text="HTML")
-        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=response) as get:
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=response) as get:
             self.assertEqual(Crawler.fetch_page(WIKI + "Music", headers=headers, timeout=3.5), (200, "HTML"))
         get.assert_called_once_with(WIKI + "Music", headers=headers, timeout=3.5)
         self.assertEqual(headers, original_headers)
@@ -212,7 +213,8 @@ class CrawlerTests(unittest.TestCase):
             articles = Crawler().get_article_links(webs[current], current, verbose=True)
         self.assertEqual(articles, [WIKI + "ABBA", WIKI + "Ziggy_Stardust"])
         self.assertIn("Links in HTML : 8", output.getvalue())
-        self.assertIn("Unique links  : 7", output.getvalue())
+        # Fragment and oldid self-links normalize to the same Wikipedia URL.
+        self.assertIn("Unique links  : 6", output.getvalue())
         self.assertIn("Article links : 2", output.getvalue())
         self.assertIn("ABBA", output.getvalue())
         with contextlib.redirect_stdout(io.StringIO()) as silent:

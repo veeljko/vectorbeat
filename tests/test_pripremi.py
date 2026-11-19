@@ -49,6 +49,14 @@ class PreparationCommandTests(unittest.TestCase):
             pripremi.main()
         self.assertEqual([call[0] for call in pipeline.mock_calls], ["napravi_evaluaciju"])
 
+    def test_removed_parallel_download_option_is_rejected_without_preparation(self):
+        with patch.object(pripremi, "pipeline") as pipeline, \
+                patch("sys.argv", ["pripremi", "--samo-graf-seed", "--html-workers", "4"]), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                pripremi.main()
+        self.assertEqual(pipeline.mock_calls, [])
+
     def test_modes_cannot_be_combined(self):
         with patch("sys.argv", ["pripremi", "--samo-evaluacija", "--samo-graf-seed"]), \
                 contextlib.redirect_stderr(io.StringIO()), \

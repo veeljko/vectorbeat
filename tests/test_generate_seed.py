@@ -189,7 +189,8 @@ class SeedResolverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "seed.parquet"
             with patch.object(WikipediaSeedResolver, "resolve_artist_page",
-                              side_effect=RuntimeError("Network unavailable")):
+                              side_effect=RuntimeError("Network unavailable")), \
+                    patch.object(WikipediaSeedResolver, "prefetch_titles"):
                 with self.assertRaises(RuntimeError):
                     generate_seed(catalog, path)
             self.assertFalse(path.exists())
@@ -202,6 +203,7 @@ class SeedResolverTests(unittest.TestCase):
             path = Path(directory) / "seed.parquet"
             with patch.object(WikipediaSeedResolver, "resolve_artist_page",
                               side_effect=[WIKI + "Boston_(band)", None]) as resolve, \
+                    patch.object(WikipediaSeedResolver, "prefetch_titles"), \
                     contextlib.redirect_stdout(io.StringIO()):
                 built = generate_seed(catalog, path)
             loaded = pd.read_parquet(path)
@@ -213,6 +215,9 @@ class SeedResolverTests(unittest.TestCase):
 
 class SeedPipelineTests(unittest.TestCase):
     def setUp(self):
+        prefetch = patch.object(WikipediaSeedResolver, "prefetch_titles")
+        prefetch.start()
+        self.addCleanup(prefetch.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
@@ -220,6 +225,9 @@ class SeedPipelineTests(unittest.TestCase):
                                GRAF_PATH=root / "graf.pkl", ARTIST_NODES_PATH=root / "artist_nodes.pkl")
         paths.start()
         self.addCleanup(paths.stop)
+        cache = patch("mrvectorbeat.crawler.crawler.PAGE_CACHE_DIR", root / "pages")
+        cache.start()
+        self.addCleanup(cache.stop)
         self.seeds = pd.DataFrame({"artist_name": ["Boston", "Missing"],
                                    "seed": [WIKI + "Boston_(band)", None]}).astype("string")
 
@@ -228,6 +236,21 @@ class SeedPipelineTests(unittest.TestCase):
         with patch.object(pipeline, "ucitaj_katalog", side_effect=AssertionError("Catalog read")), \
                 patch.object(Crawler, "fetch_page", side_effect=AssertionError("HTTP request")):
             pd.testing.assert_frame_equal(pipeline.napravi_seed(), self.seeds)
+
+    def test_interrupted_retry_resumes_even_without_retry_flag(self):
+        seeds = pd.DataFrame({"artist_name": ["Anja Kotar", "Boston", "Missing"],
+                              "seed": [None, WIKI + "Boston_(band)", None]}).astype("string")
+        seeds.to_parquet(pipeline.SEED_PATH, index=False)
+        progress = seeds[seeds["artist_name"].ne("Anja Kotar")]
+        progress.to_parquet(pipeline.SEED_PATH.with_name("seed.progress.parquet"), index=False)
+        catalog = pd.DataFrame({"track_artist": seeds["artist_name"]})
+        with patch.object(pipeline, "ucitaj_katalog", return_value=catalog), \
+                patch.object(WikipediaSeedResolver, "resolve_artist_page", return_value=WIKI + "Anja_Kotar") as resolve, \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = pipeline.napravi_seed()
+        self.assertEqual(resolve.call_args.args, ("Anja Kotar",))
+        self.assertEqual(resolve.call_count, 1)
+        self.assertEqual(result["seed"].iloc[0], WIKI + "Anja_Kotar")
 
     def test_missing_seeds_are_generated_and_subsequently_reused(self):
         catalog = pd.DataFrame({"track_artist": ["Boston"]})
@@ -281,6 +304,7 @@ class SeedPipelineTests(unittest.TestCase):
 
         def crawl(artist, graph, **options):
             graph.setdefault(options["seed"], [])
+            Crawler._save_cached_page(options["seed"], "<p>Music artist</p>")
             return graph
 
         with patch.object(Crawler, "crawl_into_graph", side_effect=crawl), \
@@ -296,6 +320,7 @@ class SeedPipelineTests(unittest.TestCase):
         def crawl(artist, graph, **options):
             self.assertEqual(options["seed"], seed)
             graph[seed] = []
+            Crawler._save_cached_page(seed, "<p>Music artist</p>")
             return graph
 
         with patch.object(Crawler, "crawl_into_graph", side_effect=crawl) as crawl_mock, \

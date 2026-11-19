@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,8 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from mrvectorbeat.crawler.crawler import Crawler
+from mrvectorbeat.crawler.crawler import Crawler, REQUEST_INTERVAL_SECONDS, WIKI
+from mrvectorbeat.crawler.generate_seed import WikipediaSeedResolver
 
 
 class FakeClock:
@@ -22,6 +24,11 @@ class FakeClock:
     def sleep(self, seconds):
         self.pauses.append(seconds)
         self.now += seconds
+
+
+class RequestDefaultsTests(unittest.TestCase):
+    def test_production_interval_is_one_second(self):
+        self.assertEqual(REQUEST_INTERVAL_SECONDS, 1.0)
 
 
 class RequestSpacingTests(unittest.TestCase):
@@ -51,7 +58,7 @@ class RequestSpacingTests(unittest.TestCase):
         return Mock(status_code=200, text="HTML", headers={})
 
     def test_first_request_has_no_initial_or_trailing_pause(self):
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=self.request):
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=self.request):
             self.assertEqual(Crawler.fetch_page("https://example.com/"), (200, "HTML"))
         self.assertEqual(self.starts, [0])
         self.assertEqual(self.clock.pauses, [])
@@ -66,7 +73,7 @@ class RequestSpacingTests(unittest.TestCase):
             return response
 
         with patch("mrvectorbeat.crawler.crawler.REQUEST_INTERVAL_SECONDS", 0.0), \
-                patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request):
+                patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request):
             Crawler.fetch_page("https://example.com/original")
             Crawler.fetch_page("https://example.com/other")
         self.assertEqual(len(self.starts), 3)
@@ -75,7 +82,7 @@ class RequestSpacingTests(unittest.TestCase):
             self.assertAlmostEqual(self.starts[index], self.finishes[index - 1])
 
     def test_waits_only_remaining_time_between_requests(self):
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=self.request):
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=self.request):
             Crawler().fetch_page("https://example.com/page")
             self.clock.now += 0.4  # Time spent processing the previous page.
             Crawler().fetch_page("https://example.com/robots.txt")
@@ -84,12 +91,46 @@ class RequestSpacingTests(unittest.TestCase):
         self.assertAlmostEqual(self.clock.now, self.finishes[-1])
 
     def test_no_pause_if_enough_time_has_already_elapsed(self):
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=self.request):
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=self.request):
             Crawler.fetch_page("https://example.com/a")
             self.clock.now += 2
             Crawler.fetch_page("https://example.com/b")
         self.assertEqual(self.clock.pauses, [])
         self.assertAlmostEqual(self.starts[1] - self.finishes[0], 2)
+
+    def test_seed_api_robots_and_html_share_the_same_interval(self):
+        seed = WIKI + "Artist"
+
+        def request(url, **kwargs):
+            response = self.request(url, **kwargs)
+            if "/w/api.php?" in url:
+                response.text = json.dumps({"query": {"pages": []}})
+            elif url.endswith("robots.txt"):
+                response.text = "User-agent: *"
+            else:
+                response.text = "<p>Music band</p>"
+            return response
+
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request), \
+                contextlib.redirect_stdout(io.StringIO()):
+            WikipediaSeedResolver()._query(titles="Artist")
+            Crawler().focused_crawl("Artist", seed=seed, max_pages=1)
+        self.assertEqual(len(self.starts), 3)
+        for index in range(1, len(self.starts)):
+            self.assertAlmostEqual(self.starts[index] - self.finishes[index - 1], 1.0)
+
+    def test_cache_hit_neither_waits_nor_resets_the_last_http_completion(self):
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=self.request) as get:
+            Crawler.fetch_page("https://example.com/first")
+            self.clock.now += 0.4
+            before = self.clock.now
+            Crawler.fetch_page("https://example.com/first")
+            self.assertEqual(self.clock.now, before)
+            self.assertEqual(self.clock.pauses, [])
+            Crawler.fetch_page("https://example.com/second")
+        self.assertEqual(get.call_count, 2)
+        self.assertAlmostEqual(self.clock.pauses[0], 0.6)
+        self.assertAlmostEqual(self.starts[1] - self.finishes[0], 1.0)
 
     def test_failed_and_non_200_requests_also_count_toward_interval(self):
         def request(url, **kwargs):
@@ -100,7 +141,7 @@ class RequestSpacingTests(unittest.TestCase):
                 response.status_code = 404
             return response
 
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request), \
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(Crawler.fetch_page("https://example.com/error"), (None, None))
             self.assertEqual(Crawler.fetch_page("https://example.com/missing"), (404, None))
@@ -116,7 +157,7 @@ class RequestSpacingTests(unittest.TestCase):
                 response.headers = {"Location": "/destination"}
             return response
 
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request) as get:
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request) as get:
             self.assertEqual(Crawler.fetch_page("https://example.com/original"), (200, "HTML"))
         self.assertEqual([c.args[0] for c in get.call_args_list],
                          ["https://example.com/original", "https://example.com/destination"])
@@ -130,7 +171,7 @@ class RequestSpacingTests(unittest.TestCase):
             response.headers = {"Location": "/loop"}
             return response
 
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request) as get, \
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request) as get, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(Crawler.fetch_page("https://example.com/loop"), (None, None))
         self.assertEqual(get.call_count, 31)
@@ -156,7 +197,7 @@ class RequestSpacingTests(unittest.TestCase):
             except Exception as error:
                 errors.append(error)
 
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=request) as get:
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=request) as get:
             first = Thread(target=fetch, args=("https://example.com/first",), daemon=True)
             second = Thread(target=fetch, args=("https://example.com/second", second_started), daemon=True)
             first.start()

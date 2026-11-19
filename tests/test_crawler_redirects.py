@@ -33,7 +33,7 @@ class RedirectIdentityTests(unittest.TestCase):
 
     def test_http_redirect_chain_returns_and_caches_the_final_url(self):
         alias, middle, target = [WIKI + title for title in ("Alias", "Middle", "Canonical")]
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=[
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=[
             Mock(status_code=301, headers={"Location": middle}),
             Mock(status_code=302, headers={"Location": target}),
             Mock(status_code=200, text="<p>music band</p>"),
@@ -49,7 +49,7 @@ class RedirectIdentityTests(unittest.TestCase):
     def test_http_200_canonical_link_also_identifies_the_target(self):
         alias, target = WIKI + "Alias", WIKI + "Canonical"
         html = '<link rel="canonical" href="/wiki/Canonical"><p>music band</p>'
-        with patch("mrvectorbeat.crawler.crawler.requests.get", return_value=Mock(
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", return_value=Mock(
             status_code=200, text=html,
         )) as get:
             self.assertEqual(Crawler.fetch_page(alias, return_url=True), (200, html, target))
@@ -58,7 +58,7 @@ class RedirectIdentityTests(unittest.TestCase):
 
     def test_redirect_metadata_survives_a_fresh_python_process_without_http(self):
         alias, target = WIKI + "Alias", WIKI + "Canonical"
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=[
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=[
             Mock(status_code=302, headers={"Location": target}), Mock(status_code=200, text="HTML"),
         ]):
             Crawler.fetch_page(alias)
@@ -68,7 +68,7 @@ from pathlib import Path
 from unittest.mock import patch
 module = importlib.import_module('mrvectorbeat.crawler.crawler')
 module.PAGE_CACHE_DIR = Path(sys.argv[1])
-with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected HTTP')):
+with patch.object(module.requests.Session, 'get', side_effect=AssertionError('Unexpected HTTP')):
     print(json.dumps([module.Crawler.fetch_page(sys.argv[2], return_url=True),
                       module.Crawler.canonical_url(sys.argv[2])]))
 """
@@ -99,7 +99,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
                          '<a href="/wiki/Alias">Same self</a>'),
         }
         crawler = Crawler()
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=lambda url, **kwargs: responses[url]) as get, \
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=lambda url, **kwargs: responses[url]) as get, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             graph = crawler.crawl_into_graph("Artist", {}, seed=root, max_pages=3)
         self.assertEqual(graph, {root: [target], target: []})
@@ -116,7 +116,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
         }
         crawler = Crawler()
         graph = {}
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=lambda url, **kwargs: responses[url]), \
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=lambda url, **kwargs: responses[url]), \
                 contextlib.redirect_stdout(io.StringIO()):
             crawler.crawl_into_graph("First", graph, seed=root, max_pages=1)
             self.assertIn(alias, graph)
@@ -130,7 +130,7 @@ with patch.object(module.requests, 'get', side_effect=AssertionError('Unexpected
         self.cache.mkdir()
         html = f'<link rel="canonical" href="{target}"><p>music band</p>'
         Crawler._cache_path(alias).write_text(json.dumps({"url": alias, "text": html}), encoding="utf-8")
-        with patch("mrvectorbeat.crawler.crawler.requests.get", side_effect=AssertionError("HTTP")):
+        with patch("mrvectorbeat.crawler.crawler.requests.Session.get", side_effect=AssertionError("HTTP")):
             Crawler.migrate_cached_aliases()
             self.assertEqual(Crawler.canonical_url(alias), target)
             self.assertEqual(Crawler.fetch_page(alias, return_url=True), (200, html, target))
