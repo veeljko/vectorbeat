@@ -145,6 +145,31 @@ Ne priprema se novi indeks; WordNet se instalira gornjom komandom i zatim
 koristi bez HTTP zahteva tokom pretrage. Ako recnik nedostaje, prikazuju se
 pocetni rezultati sa uputstvom za instalaciju.
 
+Na stranama **Stihovi** i **Jezicki model** svaka pesma u rezultatima ima opcije
+**Dopada mi se** i **Ne dopada mi se**. Ponovni klik uklanja oznaku, a izbor
+druge opcije zamenjuje prethodnu. Oznake se cuvaju za svaki upit zasebno tokom
+sesije, ukljucujuci promenu strane rezultata i povratak na prethodni upit.
+
+Dugme **Napravi plejlistu** koristi postojeci Rocchio sa parametrima
+`alpha=1`, `beta=0.75`, `gamma=0.15`. Polazni upit i vektori oznacenih pesama
+su retki TF-IDF vektori. Od pozitivnog centra oduzima se negativni, negativne
+koordinate se odsecaju, a rezultat se L2 normalizuje. Dodaje se najvise 20 novih
+termina iz pozitivnih primera; oni se proporcionalno umanjuju tako da nijedan
+ne bude tezi od polovine najslabije preostale reci pocetnog upita. Iznad
+plejliste prikazuju se reci iz odabranih tekstova koje doprinose preporukama,
+uz reci ciji je uticaj umanjen negativnim oznakama. Menjanje i uklanjanje oznaka
+automatski ponovo racuna aktivnu plejlistu i objasnjenje iz pocetnog upita.
+Ako nema nijedne oznake, prvih pet prikazanih rezultata, po jedan iz svake
+porodice, koriste se kao pretpostavljeni pozitivni primeri. Samo negativne
+oznake ne podrazumevaju i pozitivne primere.
+
+Preporuke se ocenjuju preko invertovanog indeksa i sacuvanih vektora, bez
+matrice pesme x reci. Izostavljaju se sve pesme sa do tada prikazanih strana
+rezultata i njihove porodice; u samoj plejlisti svaka porodica ima jednu verziju.
+Uzima se prvih deset preostalih pesama. Ne izostavlja se cela interna QLM
+rang-lista, jer ona sadrzi ceo katalog. Kada ima manje od deset odgovarajucih
+pesama, prikazuju se sve dostupne uz obavestenje o broju.
+
 ## Pokretanje
 
 Sve komande se pokrecu iz korena projekta, u terminalu u kom je

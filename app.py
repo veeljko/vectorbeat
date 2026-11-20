@@ -18,6 +18,8 @@ import streamlit as st
 from st_keyup import st_keyup
 
 from mrvectorbeat import pipeline, prikaz
+from mrvectorbeat.feedback_prikaz import prikazi_oznaku_pesme
+from mrvectorbeat.plejlista_prikaz import prikazi_plejlistu
 from mrvectorbeat.search.ranking.qlm import QLM
 
 # OVDE IDU importi vasih modula, npr.:
@@ -453,7 +455,8 @@ elif strana == "Stihovi":
                     st.caption(f"Ukupno pesama: {total:,} | Strana {page} od {pages}")
                     catalog_by_id = ucitaj_katalog_po_id()
                     start = (page - 1) * page_size
-                    for doc_id in list(results.hits)[start:start + page_size]:
+                    visible_ids = list(results.hits)[start:start + page_size]
+                    for doc_id in visible_ids:
                         song = catalog_by_id.loc[doc_id]
                         with st.container(border=True):
                             st.text(f"{song['track_name']} — {song['track_artist']}")
@@ -463,9 +466,12 @@ elif strana == "Stihovi":
                             for snippet in napravi_isecke(song["lyrics"], results.hits[doc_id]):
                                 st.markdown('<div style="white-space: pre-wrap">' + snippet + '</div>',
                                             unsafe_allow_html=True)
+                            prikazi_oznaku_pesme(doc_id, ("stihovi",) + context)
                             if st.button("Slične pesme", key=f"slicne_{doc_id}"):
                                 st.session_state["stihovi_slicne_izvor"] = doc_id
                                 st.session_state.pop("stihovi_poredjenje", None)
+                    prikazi_plejlistu(ind, catalog_by_id, query, ("stihovi",) + context,
+                                     list(results.hits), visible_ids)
                     source_id = st.session_state.get("stihovi_slicne_izvor")
                     if source_id is not None:
                         prikazi_slicne_pesme(source_id)
@@ -514,7 +520,8 @@ elif strana == "Jezicki model":
                        "Reči van rečnika kataloga ne utiču na ocenu.")
             catalog_by_id = ucitaj_katalog_po_id()
             start = (page - 1) * page_size
-            for doc_id in list(results.scores)[start:start + page_size]:
+            visible_ids = list(results.scores)[start:start + page_size]
+            for doc_id in visible_ids:
                 song = catalog_by_id.loc[doc_id]
                 present, missing = query_word_coverage(query, song["lyrics"])
                 with st.container(border=True):
@@ -522,6 +529,9 @@ elif strana == "Jezicki model":
                     st.caption(f"QLM ocena (log-verovatnoća): {results.scores[doc_id]:.6f}")
                     st.markdown("Sadrži: " + (", ".join(f"*{word}*" for word in present) or "—"))
                     st.markdown("Nedostaje: " + (", ".join(f"*{word}*" for word in missing) or "—"))
+                    prikazi_oznaku_pesme(doc_id, ("jezicki", query))
+            prikazi_plejlistu(ind, catalog_by_id, query, ("jezicki", query),
+                             list(results.scores), visible_ids)
 
 
 # --- Evaluacija --------------------------------------------------------
