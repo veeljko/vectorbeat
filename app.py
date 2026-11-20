@@ -297,7 +297,7 @@ with st.sidebar:
     #   prikaz.statistika("Reci u indeksu", broj_reci())
 
 
-if strana not in ("Evaluacija", "Izvodjaci"):
+if strana not in ("Obrada teksta", "Evaluacija", "Izvodjaci"):
     porodice = ucitaj_porodice()
     try:
         df = ucitaj_katalog()
@@ -637,6 +637,39 @@ elif strana == "Hibridna pretraga":
 
 else:
     st.title("Obrada teksta")
-    st.caption("Kako se stihovi pretvaraju u reci kojima pretrazujemo.")
+    st.caption("Unesi proizvoljan tekst i prati rezultat svakog koraka obrade.")
 
-    # Koristi: vas modul za obradu teksta
+    from mrvectorbeat.textprocessing.text_processor import TextProcessor, stop_words
+
+    text = st.text_area(
+        "Tekst za obradu",
+        placeholder="I'm RUNNING through the night! Don't stop, nothin’ can hold me down.",
+        height=150,
+        key="obrada_tekst",
+    )
+    if not text.strip():
+        st.info("Unesi tekst da bi video međurezultate obrade.")
+    else:
+        processor = TextProcessor(text)
+
+        lower = processor.to_lower(text)
+        st.subheader("1. Pretvaranje u mala slova")
+        st.code(lower, language=None)
+
+        tokens = processor.extract_words(lower)
+        st.subheader("2. Izdvajanje reči")
+        st.caption("Apostrofi se uklanjaju, pa don’t i dont daju isti token. "
+                   "Crtice i kose crte razdvajaju reči.")
+        st.json(tokens, expanded=True)
+        st.caption(f"Broj izdvojenih tokena: {len(tokens)}")
+
+        filtered = processor.remove_stop_words(tokens, stop_words)
+        st.subheader("3. Uklanjanje stop-reči")
+        st.json(filtered, expanded=True)
+        st.caption(f"Preostalo tokena: {len(filtered)}; uklonjeno: {len(tokens) - len(filtered)}. "
+                   "Koristi se ista lista stop-reči kao pri obradi stihova i upita.")
+
+        stems = processor.word_stem(filtered)
+        st.subheader("4. Svođenje reči na koren — konačni tokeni")
+        st.json(stems, expanded=True)
+        st.caption(f"Broj konačnih tokena: {len(stems)} | Različitih korena: {len(set(stems))}")
