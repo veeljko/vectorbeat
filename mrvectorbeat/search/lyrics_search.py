@@ -1,11 +1,13 @@
 """Pretraga nad jednim indeksom i iseci originalnih stihova."""
 
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from html import escape
 import math
 
 from mrvectorbeat.search.indexes.position_index import PositionIndex
+from mrvectorbeat.search.ranking.qlm import QLM
 from mrvectorbeat.textprocessing.text_processor import TextProcessor
 
 
@@ -15,6 +17,8 @@ class LyricsResults:
     # katalog_id -> svi pogodjeni rasponi obradjenih tokena [pocetak, kraj).
     hits: dict[int, list[tuple[int, int]]]
     scores: dict[int, float] = field(default_factory=dict)
+    added_words: list[str] = field(default_factory=list)
+    expansion_warning: str = ""
 
 
 def _ranked_results(index: PositionIndex, terms: list[str], scores: dict[int, float],
@@ -129,6 +133,64 @@ def search_lyrics(index: PositionIndex, query: str, mode: str = "boolean",
     else:
         raise ValueError("Nepoznat rezim pretrage.")
     return results
+
+
+def search_lyrics_qlm(model: QLM, query: str,
+                      families: Mapping[int, str] | None = None) -> LyricsResults:
+    """Rank remembered lyrics with Dirichlet smoothing, without an AND filter.
+
+    Ignore collection-OOV terms for scoring: Dirichlet cannot give them a
+    positive probability. Keep the full query for word-coverage explanations.
+    With no known terms, return no arbitrary zero-score or -inf results.
+    """
+    terms = TextProcessor(query).text_tokenize()
+    known_terms = [term for term in terms if model.pc.get(term, 0.0) > 0]
+    if not known_terms:
+        return LyricsResults(terms, {})
+    scores = dict(model.rank(known_terms, mode="dir", topk=len(model.idx.doc_len)))
+    return _ranked_results(model.idx, terms, scores, families, include_hits=False)
+
+
+def search_lyrics_with_synonyms(model: QLM, query: str,
+                                families: Mapping[int, str] | None = None) -> LyricsResults:
+    """Try the original QLM query, then automatically expand poor coverage once."""
+    from mrvectorbeat.search.ranking.wordnet_expansion import (
+        FEEDBACK_DOCUMENTS, expand_with_wordnet, needs_query_expansion,
+    )
+
+    results = search_lyrics_qlm(model, query, families)
+    if not needs_query_expansion(model.idx, results.terms, results.scores):
+        return results
+    weights = Counter(term for term in results.terms if model.pc.get(term, 0.0) > 0)
+    try:
+        weights, added_words = expand_with_wordnet(
+            model.idx, query, weights, list(results.scores)[:FEEDBACK_DOCUMENTS])
+    except LookupError:
+        results.expansion_warning = (
+            "WordNet rečnik nije dostupan; prikazani su početni rezultati. "
+            "Instalirajte ga komandom: python -m nltk.downloader wordnet, "
+            "pa ponovo pokrenite aplikaciju.")
+        return results
+    if not added_words:
+        return results
+    scores = dict(model.rank(weights, mode="dir", topk=len(model.idx.doc_len)))
+    expanded = _ranked_results(model.idx, results.terms, scores, families, include_hits=False)
+    expanded.added_words = added_words
+    return expanded
+
+
+def query_word_coverage(query: str, lyrics: str) -> tuple[list[str], list[str]]:
+    """Return present/missing query words in input order, without stemming.
+
+    Include stopwords, compare whole words ignoring case and punctuation, and
+    show each word once. This is independent of the processed ranking tokens:
+    for example, 'hope' is missing from lyrics containing only 'hopeless'.
+    """
+    query_processor = TextProcessor(query)
+    words = dict.fromkeys(query_processor.extract_words(query.lower()))
+    lyrics_words = set(TextProcessor(lyrics).extract_words(lyrics.lower()))
+    return ([word for word in words if word in lyrics_words],
+            [word for word in words if word not in lyrics_words])
 
 
 def make_snippets(lyrics: str, hits: list[tuple[int, int]], context: int = 8,

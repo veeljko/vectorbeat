@@ -46,6 +46,26 @@ class QLMTests(unittest.TestCase):
                                2 * math.log(2 / 3) + math.log(1 / 3))
         self.assertEqual(self.model.score(["love", "music"], 20, "mle"), -math.inf)
 
+    def test_fractional_weights_use_a_weighted_sum_without_reprocessing(self):
+        query = {"love": 2.0, "music": 0.25, "unknown": 0.0}
+        with patch.object(TextProcessor, "text_tokenize", side_effect=AssertionError("Already processed")):
+            self.assertAlmostEqual(self.model.score(query, 10),
+                                   2 * math.log(1 / 2) + 0.25 * math.log(1 / 3))
+            ranked = self.model.rank(query)
+        self.assertEqual([doc_id for doc_id, _ in ranked], [10, 30, 40, 20])
+        for doc_id, score in ranked:
+            self.assertAlmostEqual(score, 2 * math.log(self.model.p_dirichlet("love", doc_id))
+                                   + 0.25 * math.log(self.model.p_dirichlet("music", doc_id)))
+        self.assertEqual(query, {"love": 2.0, "music": 0.25, "unknown": 0.0})
+
+    def test_invalid_explicit_query_weights_are_rejected(self):
+        for weight in (-1, math.inf, math.nan, True, "0.25"):
+            with self.subTest(weight=weight):
+                with self.assertRaises(ValueError):
+                    self.model.rank({"love": weight})
+                with self.assertRaises(ValueError):
+                    self.model.score({"love": weight}, 10)
+
     def test_dirichlet_ranks_all_documents_including_those_without_query_words(self):
         ranked = self.model.rank(["love", "music"], topk=10)
         self.assertEqual([doc_id for doc_id, _ in ranked], [10, 30, 20, 40])

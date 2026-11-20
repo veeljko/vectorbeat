@@ -18,6 +18,7 @@ import streamlit as st
 from st_keyup import st_keyup
 
 from mrvectorbeat import pipeline, prikaz
+from mrvectorbeat.search.ranking.qlm import QLM
 
 # OVDE IDU importi vasih modula, npr.:
 #   from mrvectorbeat import tekst, upit, indeks, tfidf, bm25, ...
@@ -252,8 +253,14 @@ def prikazi_slicne_pesme(source_id):
 
 
 @st.cache_resource
-def ucitaj_jezicki(mu):
-    pass
+def ucitaj_jezicki(mu=1500.0):
+    return QLM(ucitaj_indeks(), mu=mu)
+
+
+@st.cache_data(max_entries=50)
+def pretrazi_jezicki(query, mu=1500.0):
+    from mrvectorbeat.search.lyrics_search import search_lyrics_with_synonyms
+    return search_lyrics_with_synonyms(ucitaj_jezicki(mu), query, ucitaj_porodice_po_id())
 
 
 @st.cache_data
@@ -467,11 +474,54 @@ elif strana == "Stihovi":
 # --- Jezicki model -----------------------------------------------------
 
 elif strana == "Jezicki model":
-    st.title("Jezicki model i prosirenje upita")
-    st.caption("Treci nacin rangiranja, i sta se sve moze dodati upitu.")
+    st.title("Koja je ovo pesma?")
+    st.caption("QLM sa Dirichlet ublažavanjem (μ=1500). Pesma može biti u rezultatima "
+               "i kada joj nedostaju reči iz upita.")
 
-    # Koristi: ucitaj_jezicki(mu), ucitaj_bm25(), ucitaj_tokene_po_pesmi(),
-    #          ucitaj_qrels(), ind, df, prikaz.kartica()
+    query = st.text_input(
+        "Unesite deo stiha kojeg se sećate",
+        placeholder="found love in a place without hope",
+        key="jezicki_upit",
+    )
+    if ind is None:
+        st.info(index_error or "Prvo pripremite katalog i indeks: python -m scripts.pripremi")
+    elif query.strip():
+        results = pretrazi_jezicki(query)
+        if results.expansion_warning:
+            st.warning(results.expansion_warning)
+        if results.added_words:
+            st.markdown("Uključeni su i rezultati za: "
+                        + ", ".join(f"*{word}*" for word in results.added_words))
+        if not results.terms:
+            st.info("Posle obrade upita nije ostao nijedan termin.")
+        elif not results.scores:
+            st.info("Nijedna obrađena reč upita ne postoji u katalogu.")
+        else:
+            from mrvectorbeat.search.lyrics_search import query_word_coverage
+
+            page_size = st.selectbox("Rezultata po strani", [10, 20, 50], key="jezicki_velicina")
+            total = len(results.scores)
+            pages = (total + page_size - 1) // page_size
+            selection = (query, page_size)
+            if st.session_state.get("jezicki_izbor") != selection:
+                st.session_state["jezicki_strana"] = 1
+                st.session_state["jezicki_izbor"] = selection
+            page = st.number_input("Strana rezultata", min_value=1, max_value=pages,
+                                   step=1, key="jezicki_strana")
+            st.caption(f"Ukupno pesama: {total:,} | Strana {page} od {pages}")
+            st.caption("Prikazana je najbolje ocenjena verzija svake pesme. "
+                       "Prisustvo reči proverava se u izvornom tekstu, bez stemovanja. "
+                       "Reči van rečnika kataloga ne utiču na ocenu.")
+            catalog_by_id = ucitaj_katalog_po_id()
+            start = (page - 1) * page_size
+            for doc_id in list(results.scores)[start:start + page_size]:
+                song = catalog_by_id.loc[doc_id]
+                present, missing = query_word_coverage(query, song["lyrics"])
+                with st.container(border=True):
+                    st.text(f"{song['track_name']} — {song['track_artist']}")
+                    st.caption(f"QLM ocena (log-verovatnoća): {results.scores[doc_id]:.6f}")
+                    st.markdown("Sadrži: " + (", ".join(f"*{word}*" for word in present) or "—"))
+                    st.markdown("Nedostaje: " + (", ".join(f"*{word}*" for word in missing) or "—"))
 
 
 # --- Evaluacija --------------------------------------------------------

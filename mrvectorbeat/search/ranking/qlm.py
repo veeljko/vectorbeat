@@ -1,7 +1,7 @@
 """Query Likelihood Model with MLE and Dirichlet smoothing."""
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import math
 
 
@@ -43,14 +43,20 @@ class QLM:
             raise ValueError("mode must be 'mle' or 'dir'.")
 
     @staticmethod
-    def _query_counts(query: str | Iterable[str]) -> Counter[str]:
+    def _query_counts(query: str | Iterable[str] | Mapping[str, float]) -> Counter[str]:
         if isinstance(query, str):
             from mrvectorbeat.textprocessing.text_processor import TextProcessor
 
             query = TextProcessor(query).text_tokenize()
+        if isinstance(query, Mapping):
+            for weight in query.values():
+                if (isinstance(weight, bool) or not isinstance(weight, (int, float))
+                        or not math.isfinite(weight) or weight < 0):
+                    raise ValueError("Query weights must be finite nonnegative numbers.")
+            return Counter({term: weight for term, weight in query.items() if weight > 0})
         return Counter(query)
 
-    def _score_counts(self, counts: Counter[str], doc_id: int, mode: str) -> float:
+    def _score_counts(self, counts: Mapping[str, float], doc_id: int, mode: str) -> float:
         probability = self.p_mle if mode == "mle" else self.p_dirichlet
         score = 0.0
         for term, count in counts.items():
@@ -60,9 +66,13 @@ class QLM:
             score += count * math.log(value)
         return score
 
-    def score(self, query: str | Iterable[str], doc_id: int, mode: str = "dir") -> float:
-        """Return log p(query | document), counting repeated query words.
+    def score(self, query: str | Iterable[str] | Mapping[str, float],
+              doc_id: int, mode: str = "dir") -> float:
+        """Return a weighted sum of log probabilities for the query.
 
+        Strings/iterables count each occurrence with weight 1. A mapping holds
+        already processed terms with explicit weights, including fractions for
+        synonym expansion. Zero weights are ignored.
         Zero probability gives -inf. Dirichlet smoothing is positive only for
         words present in the collection; an unseen collection word still gives
         -inf. An empty query has a score of zero.
@@ -70,7 +80,7 @@ class QLM:
         self._validate_mode(mode)
         return self._score_counts(self._query_counts(query), doc_id, mode)
 
-    def rank(self, query: str | Iterable[str], mode: str = "dir",
+    def rank(self, query: str | Iterable[str] | Mapping[str, float], mode: str = "dir",
              topk: int = 10) -> list[tuple[int, float]]:
         """Score all documents and return the first topk (document ID, score).
 

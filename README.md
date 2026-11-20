@@ -42,6 +42,7 @@ zvati i sta ce biti u kom fajlu, odlucujete vi.
 python -m venv .venv
 .venv\Scripts\activate            # Windows (Linux/macOS: source .venv/bin/activate)
 pip install -r requirements.txt
+python -m nltk.downloader wordnet
 ```
 
 Opciono, GPU (NVIDIA): torch iz requirements.txt je CPU verzija. CUDA verzija:
@@ -126,6 +127,23 @@ Indeks `artifacts/slicni_izvodjaci.pkl` priprema se komandom
 `python -m scripts.pripremi --samo-slicni-izvodjaci`, ili u punoj pripremi.
 Ovaj korak koristi vec sacuvan graf; aplikacija ocenjuje samo kandidate koji
 dele ulaznu stranicu sa izabranim izvodjacem, bez novih HTTP zahteva.
+
+Strana **Jezicki model** koristi QLM sa Dirichlet ublazavanjem (`mu=1500`).
+Ako nijedna od prvih pet pesama ne sadrzi bar 80% razlicitih obradjenih reci
+upita, automatski se pokrece prosirenje sinonimima iz lokalnog WordNet recnika.
+Ovo je pocetna heuristika pokrivenosti, a ne procena verovatnoce tacnog rezultata;
+prag je `MIN_QUERY_COVERAGE` u `search/ranking/wordnet_expansion.py`.
+WordNet se pretrazuje izvornim recima, pre stemovanja, uz najvise dva znacenja
+po vrsti reci. Koriste se samo jednoclani sinonimi koji postoje u indeksu.
+Postojeci Rocchio (`alpha=1`, `beta=0.75`, `gamma=0`) daje prednost sinonimima
+podrzanim pocetnim rezultatima. Dodaje se najvise pet termina ukupno, po dva
+za svaku rec upita, bez dupliranja stemova. Originalne reci zadrzavaju tezinu 1
+po pojavljivanju, a sinonimi dobijaju 0.25 u zbiru QLM log-verovatnoca.
+Posle jednog ponovnog rangiranja stvarno dodate reci ispisuju se iznad rezultata.
+Prikaz sadrzanih/nedostajucih reci i dalje se odnosi samo na otkucani upit.
+Ne priprema se novi indeks; WordNet se instalira gornjom komandom i zatim
+koristi bez HTTP zahteva tokom pretrage. Ako recnik nedostaje, prikazuju se
+pocetni rezultati sa uputstvom za instalaciju.
 
 ## Pokretanje
 
